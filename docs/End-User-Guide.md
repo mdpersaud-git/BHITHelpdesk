@@ -10,7 +10,8 @@ Need IT? There are three ways to ask. They all create the same ticket, and you c
    - **Category** – this picks itself from what you type (e.g. "printer" gives Printer). Change it if it's wrong.
    - **How urgent is it?** *I can't work at all*, *It's slowing me down*, or *No rush*. Please be honest: it decides who gets help first.
    - **Details** – what happened and when it started. Error messages and the device name help a lot.
-3. Click **Send to IT**. You will see **Ticket IT-<number> created**.
+3. (Optional) **On behalf of** – if you are reporting this for a colleague, enter their Branthaven email address. The updates will go to them.
+4. Click **Send to IT**. You will see **Ticket IT-<number> created**.
 
 ## 2. Email
 

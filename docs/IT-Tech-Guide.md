@@ -22,6 +22,10 @@ Every new ticket then runs HD3: it sets permissions (the requester sees only the
 5. **Resolve**: set Status to *Resolved Pending Confirmation* (or complete the Planner task). The requester is notified.
 6. The system **closes it automatically after 48 hours**, with a reminder to the requester at 24 hours. Set *Closed* yourself if they confirm earlier.
 
+## Logging a ticket for someone else
+
+In the **Report an IT issue** app, fill in **On behalf of** with the person's Branthaven email address (e.g. jane@branthaven.com). The ticket then belongs to that person: they get the confirmation and every update, and the ticket shows *Logged by <you>*. It is **not** assigned to you. It lands unassigned like any other ticket, so the team can pick it up. Leave the box empty to log a ticket for yourself. Only @branthaven.com addresses are accepted.
+
 ## Status guide
 
 | Status | Use when | SLA clock |

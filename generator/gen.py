@@ -1072,16 +1072,19 @@ def hd14():
     trig = {"manual": {"type": "Request", "kind": "PowerAppV2", "inputs": {"schema": {"type": "object",
         "properties": {"text": prop("What", "One-line summary"), "text_1": prop("Category", "Category choice"),
                        "text_2": prop("Urgency", "I can't work at all / It's slowing me down / No rush"),
-                       "text_3": prop("Details", "Details")},
+                       "text_3": prop("Details", "Details"),
+                       "text_4": prop("OnBehalf", "Optional: email of the person this ticket is for")},
         "required": ["text", "text_1", "text_2", "text_3"]}}}}
     T = lambda k: f"triggerBody()?['{k}']"
     acts = seq([
-        ("Requester", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
+        ("Submitter", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
+        ("OnBehalf", compose("@toLower(trim(coalesce(triggerBody()?['text_4'],'')))")),
+        ("Requester", compose("@if(and(endsWith(outputs('OnBehalf'),'@branthaven.com'),not(contains(outputs('OnBehalf'),' ')),not(equals(outputs('OnBehalf'),'@branthaven.com'))),outputs('OnBehalf'),outputs('Submitter'))")),
         ("Create_item", sp("PostItem", {
             "item/Title": f"@substring(coalesce({T('text')},'(no summary)'),0,min(length(coalesce({T('text')},'(no summary)')),250))",
             "item/Category/Value": f"@if(empty(coalesce({T('text_1')},'')),'Uncategorized',{T('text_1')})",
             "item/Priority/Value": f"@if(startsWith(coalesce({T('text_2')},''),'I can'),'High',if(equals({T('text_2')},'No rush'),'Low','Medium'))",
-            "item/Details": f"@{T('text_3')}",
+            "item/Details": f"@if(equals(outputs('Requester'),outputs('Submitter')),{T('text_3')},concat('[Logged by ',outputs('Submitter'),' on behalf of ',outputs('Requester'),']',decodeUriComponent('%0A%0A'),{T('text_3')}))",
             "item/Requester/Claims": "@outputs('Requester')",
             "item/RequesterEmail": "@outputs('Requester')",
             "item/Source/Value": "Teams form",
