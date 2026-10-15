@@ -341,7 +341,7 @@ def hd1():
     T = "triggerOutputs()?['body/subject']"
     title_expr = f"@if(empty(coalesce({T},'')),'(no subject)',substring({T},0,min(length({T}),250)))"
     def attach_loop(item_id, after, suffix):
-        return {"runAfter": after, "type": "Foreach", "foreach": "@triggerOutputs()?['body/attachments']",
+        return {"runAfter": after, "type": "Foreach", "foreach": "@body('Real_attachments')",
                 "actions": {f"Add_attachment{suffix}": sp("CreateAttachment", {
                     "itemId": item_id, "displayName": f"@items('Apply_to_each{suffix}')?['name']",
                     "body": f"@base64ToBinary(items('Apply_to_each{suffix}')?['contentBytes'])"})}}
@@ -403,6 +403,9 @@ def hd1():
     ])
     actions = seq([
         ("Sender", compose("@toLower(triggerOutputs()?['body/from'])")),
+        # skip inline images (signature logos); only real attachments go on the ticket
+        ("Real_attachments", {"type": "Query", "inputs": {"from": "@coalesce(triggerOutputs()?['body/attachments'],createArray())",
+                                                          "where": "@not(equals(item()?['isInline'],true))"}}),
         ("Is_it_a_real_internal_email", cond(
             f"@and(endsWith(outputs('Sender'),'@branthaven.com'),not(equals(outputs('Sender'),toLower('{MBX}'))),"
             f"not(startsWith(coalesce({T},''),'Automatic reply')),not(startsWith(coalesce({T},''),'Undeliverable')))",
