@@ -182,7 +182,7 @@ def channel_card_update(msgid, card_expr, after=None):
 
 CARD_TYPE = "ITHelpDeskTicketCard"
 
-def action_card(ID, title, req, cat, pri, src, details):
+def action_card(ID, title, req, cat, pri, src, details, pic=None):
     """Static ticket card with action buttons (Adaptive Card 1.2 for Teams mobile). Args are expressions without a leading @."""
     tid = f"@{{{ID}}}"
     def text_card(inputs, act):
@@ -204,6 +204,7 @@ def action_card(ID, title, req, cat, pri, src, details):
                 {"title": "Priority", "value": f"@{{{pri}}}"},
                 {"title": "Source", "value": f"@{{{src}}}"}]},
             {"type": "TextBlock", "text": f"@{{{details}}}", "wrap": True, "size": "Small", "maxLines": 6},
+            *([{"type": "TextBlock", "text": "Image attached. Open the ticket to view it.", "weight": "Bolder", "color": "Accent", "wrap": True, "isVisible": pic}] if pic else []),
             {"type": "TextBlock", "text": "Status changes and history appear in the replies below.", "isSubtle": True, "size": "Small", "wrap": True}],
         "actions": [
             {"type": "Action.Submit", "title": "Assign to me", "data": {"act": "assign", "ticket": tid}},
@@ -211,7 +212,8 @@ def action_card(ID, title, req, cat, pri, src, details):
             {"type": "Action.ShowCard", "title": "Update status", "card": text_card(status_inputs, "status")},
             {"type": "Action.ShowCard", "title": "Note to user", "card": text_card(
                 [{"type": "Input.Text", "id": "note_text", "isMultiline": True, "placeholder": "Message the user sees by email and Teams"}], "note")},
-            {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{LIST_URL}@{{{ID}}}"}]}
+            {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{LIST_URL}@{{{ID}}}"},
+            *([{"type": "Action.OpenUrl", "title": "View image", "url": f"{SITE}/Lists/Tickets/DispForm.aspx?ID=@{{{ID}}}", "isVisible": pic}] if pic else [])]}
 
 def move(folder, after=None):
     return op("shared_office365", "MoveV2", {"messageId": "@triggerOutputs()?['body/id']", "folderPath": folder,
@@ -280,6 +282,7 @@ CONFIRM_BODY = (
     '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
     "<p>Hi @{first(split(trim(coalesce(§T§Requester/DisplayName'],first(split(outputs('ReqEmail'),'@')))),' '))},</p>"
     "<p><b>SUBJECT:</b> @{§T§Title']}<br><b>DESCRIPTION:</b> @{coalesce(§T§Details'],'')}</p>"
+    "@{if(outputs('HasPic'),'<p><b>IMAGE:</b> 1 image is attached to your ticket.</p>','')}"
     "<p>This email was system generated for the purpose of communicating that the referenced Ticket Number has been created to record your contact with the IT Team. "
     "To keep you informed on the progress of your Ticket, you will receive ongoing automated emails and Teams messages when your IT Ticket Status changes as follows:</p>"
     '<table style="border-collapse:collapse;margin:8px 0 12px 0">'
@@ -377,7 +380,7 @@ def hd1():
         ("Apply_to_each_2", attach_loop("@body('Create_followup_item')?['ID']", None, "_2")),
     ])
     reply_branch = seq([
-        ("TicketId", compose(f"@int(first(split(last(split({T},'[IT-')),']')))")),
+        ("TicketId", compose(f"@if(contains(coalesce({T},''),'[IT-'),int(first(split(last(split({T},'[IT-')),']'))),outputs('RefNum'))")),
         ("ReplyText", compose("@" + strip_signature(f"first(split(first(split(body('Html_to_text'),'{MARKER}')),'From: '))"))),
         ("Get_item", sp("GetItem", {"id": "@outputs('TicketId')"})),
         ("Update_existing_ticket", cond(
@@ -399,7 +402,14 @@ def hd1():
                      ("Terminate", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}})]))),
         ("Html_to_text", op("shared_conversionservice", "HtmlToText", {"Content": "@triggerOutputs()?['body/body']"})),
         ("CleanBody", compose("@if(empty(" + strip_signature("body('Html_to_text')") + "),substring(body('Html_to_text'),0,min(length(body('Html_to_text')),2000))," + strip_signature("body('Html_to_text')") + ")")),
-        ("Is_it_a_reply", cond(f"@contains(coalesce({T},''),'[IT-')", reply_branch, new_branch)),
+        # safety net: no [IT-n] in the subject, but the subject or body names IT-n (first occurrence; digits only)
+        ("RefPart", compose(f"@concat(coalesce(split(toUpper(concat(coalesce({T},''),' ',coalesce(body('Html_to_text'),''))),'IT-')?[1],''),'     ')")),
+        ("RefNum", compose("@if(not(contains('0123456789',substring(outputs('RefPart'),0,1))),0,"
+                           "int(substring(outputs('RefPart'),0,if(not(contains('0123456789',substring(outputs('RefPart'),1,1))),1,"
+                           "if(not(contains('0123456789',substring(outputs('RefPart'),2,1))),2,"
+                           "if(not(contains('0123456789',substring(outputs('RefPart'),3,1))),3,"
+                           "if(not(contains('0123456789',substring(outputs('RefPart'),4,1))),4,5)))))))")),
+        ("Is_it_a_reply", cond(f"@or(contains(coalesce({T},''),'[IT-'),greater(outputs('RefNum'),0))", reply_branch, new_branch)),
         ("Move_to_Processed", move(F_PROCESSED)),
     ])
     trigger = {"When_a_new_email_arrives_in_a_shared_mailbox_(V2)": {
@@ -468,6 +478,9 @@ def hd3():
             "id": "@body('Create_a_task')?['id']",
             "body/description": (f"Requester: @{{outputs('ReqEmail')}}\nCategory: @{{{t('Category/Value')}}}\nPriority: @{{{t('Priority/Value')}}}\n"
                                  f"Source: @{{{t('Source/Value')}}}\n\n@{{{t('Details')}}}\n\n{LIST_URL}@{{{ID}}}")})),
+        ("Wait_for_attachment", {"type": "Wait", "inputs": {"interval": {"count": 10, "unit": "Second"}}}),
+        ("Get_ticket", sp("GetItem", {"id": f"@{ID}"})),
+        ("HasPic", compose("@equals(body('Get_ticket')?['{HasAttachments}'],true)")),
         ("IsOpenNow", compose(
             f"@and(greaterOrEquals(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),7),less(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),21))")),
         ("HoursLine", compose("@if(outputs('IsOpenNow'),'A technician will pick it up shortly.','Support hours are 7:00 am to 9:00 pm, every day. Your ticket will be actioned when support reopens at 7:00 am.')")),
@@ -479,11 +492,12 @@ def hd3():
                 "actions": support_msg("Send_confirmation_chat", "@outputs('ReqEmail')",
                     f"<p><b>IT-@{{{ID}}} created:</b> @{{{t('Title')}}}</p>"
                     f"<p>Status: @{{if(empty(coalesce({t('AssignedTo/Email')},'')),'Open','Assigned')}} · Urgency: @{{{t('Priority/Value')}}}</p>"
+                    "@{if(outputs('HasPic'),'<p>Image attached.</p>','')}"
                     "<p>You'll get a message here and an email each time the status changes.</p>" + support_links(ID, t('Title')))}),
         ]))),
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
         ("Card", compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
-            f"substring(coalesce({t('Details')},''),0,min(length(coalesce({t('Details')},'')),400))"))),
+            f"substring(coalesce({t('Details')},''),0,min(length(coalesce({t('Details')},'')),400))", pic="@outputs('HasPic')"))),
         ("Post_to_Help_Desk_channel", channel_card("@{string(outputs('Card'))}", card_type=CARD_TYPE)),
         ("Update_item", sp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{t('Title')}",
@@ -1073,7 +1087,8 @@ def hd14():
         "properties": {"text": prop("What", "One-line summary"), "text_1": prop("Category", "Category choice"),
                        "text_2": prop("Urgency", "I can't work at all / It's slowing me down / No rush"),
                        "text_3": prop("Details", "Details"),
-                       "text_4": prop("OnBehalf", "Optional: email of the person this ticket is for")},
+                       "text_4": prop("OnBehalf", "Optional: email of the person this ticket is for"),
+                       "text_5": prop("Screenshot", "Optional: picture as a data URI from the app")},
         "required": ["text", "text_1", "text_2", "text_3"]}}}}
     T = lambda k: f"triggerBody()?['{k}']"
     acts = seq([
@@ -1089,7 +1104,13 @@ def hd14():
             "item/RequesterEmail": "@outputs('Requester')",
             "item/Source/Value": "Teams form",
             "item/Status/Value": S_OPEN})),
-        ("Respond_to_the_app", {"type": "Response", "kind": "PowerApp", "runAfter": ra("Create_item"),
+        ("Has_a_screenshot", cond("@contains(coalesce(triggerBody()?['text_5'],''),'base64,')", {
+            "Shot_clean": compose("@replace(triggerBody()?['text_5'],'\"','')"),
+            "Add_screenshot": sp("CreateAttachment", {
+                "itemId": "@body('Create_item')?['ID']",
+                "displayName": "@concat('screenshot.',replace(first(split(last(split(outputs('Shot_clean'),'data:image/')),';')),'jpeg','jpg'))",
+                "body": "@base64ToBinary(last(split(outputs('Shot_clean'),'base64,')))"}, after={"Shot_clean": ["Succeeded"]})})),
+        ("Respond_to_the_app", {"type": "Response", "kind": "PowerApp", "runAfter": ra("Has_a_screenshot"),
             "inputs": {"statusCode": 200, "body": {"ticketid": "@{body('Create_item')?['ID']}"},
                        "schema": {"type": "object", "properties": {"ticketid": {"title": "ticketid", "x-ms-dynamically-added": True, "type": "string"}}}}}),
     ])
@@ -1177,7 +1198,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd14()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
