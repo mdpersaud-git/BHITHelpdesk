@@ -517,8 +517,17 @@ def hd3():
             "item/ChannelMessageId": "@body('Post_to_Help_Desk_channel')?['id']",
             "item/Conversation": "@outputs('CreatedLine')"})),
     ])
-    actions["Tell_requester"]["runAfter"] = ra("HoursLine")
-    actions["CreatedLine"]["runAfter"] = ra("Tell_requester", status=("Succeeded", "Failed", "Skipped"))
+    # The requester's confirmation must not depend on Planner or the channel: the Planner steps sit in their own
+    # scope, after the confirmation, and everything after them runs whether they worked or not.
+    ANY3 = ("Succeeded", "Failed", "Skipped")
+    planner = {n: actions.pop(n) for n in ("Create_a_task", "Has_tech_at_creation", "Update_task_details")}
+    planner["Create_a_task"]["runAfter"] = {}
+    planner["Has_tech_at_creation"]["runAfter"] = ra("Create_a_task", status=ANY3)
+    planner["Update_task_details"]["runAfter"] = ra("Has_tech_at_creation", status=ANY3)
+    actions["Wait_for_attachment"]["runAfter"] = ra("Has_requester", status=ANY3)
+    actions["Tell_requester"]["runAfter"] = ra("HoursLine", status=ANY3)
+    actions["Planner_task"] = {"type": "Scope", "runAfter": ra("Tell_requester", status=ANY3), "actions": planner}
+    actions["CreatedLine"]["runAfter"] = ra("Planner_task", status=ANY3)
     actions["Update_item"]["runAfter"] = ra("Post_to_Help_Desk_channel", status=("Succeeded", "Failed"))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
