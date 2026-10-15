@@ -300,12 +300,20 @@ CONFIRM_BODY = (
     "</div>")
 
 SIG_MARKERS = ["Regards", "Thks", "Thanks,", "Thank you,", "Cheers,", "Sent from my", "Get Outlook for", "[cid:", "[https://", "T: ", "________________"]
-def strip_signature(expr):
+HARD_SIG_MARKERS = ["Regards", "Sent from my", "Get Outlook for", "[cid:", "[https://", "T: ", "________________"]
+def strip_signature(expr, markers=None):
     """Cut text at the first signature marker. expr is an expression without a leading @."""
     out = expr
-    for m in SIG_MARKERS:
+    for m in (markers or SIG_MARKERS):
         out = f"first(split({out},'{m}'))"
     return f"trim({out})"
+
+def clean_text(expr):
+    """Strip the signature. If that leaves nothing (the message itself starts with 'Thanks' etc.),
+    cut only at the hard signature markers, and as a last resort keep the first 2000 characters."""
+    return (f"if(not(empty({strip_signature(expr)})),{strip_signature(expr)},"
+            f"if(not(empty({strip_signature(expr, HARD_SIG_MARKERS)})),{strip_signature(expr, HARD_SIG_MARKERS)},"
+            f"substring({expr},0,min(length({expr}),2000))))")
 
 USER_CARD_TYPE = "ITHelpDeskUserCard"
 CHAT_NOTICE = "Please don't reply in this chat, as messages typed here aren't seen by IT. Use Reply to IT or the answer box above."
@@ -381,7 +389,7 @@ def hd1():
     ])
     reply_branch = seq([
         ("TicketId", compose(f"@if(contains(coalesce({T},''),'[IT-'),int(first(split(last(split({T},'[IT-')),']'))),outputs('RefNum'))")),
-        ("ReplyText", compose("@" + strip_signature(f"first(split(first(split(body('Html_to_text'),'{MARKER}')),'From: '))"))),
+        ("ReplyText", compose("@" + clean_text(f"first(split(first(split(body('Html_to_text'),'{MARKER}')),'From: '))"))),
         ("Get_item", sp("GetItem", {"id": "@outputs('TicketId')"})),
         ("Update_existing_ticket", cond(
             f"@and(not(empty(string(coalesce({gi}?['ID'],'')))),not(equals({gi}?['Status']?['Value'],'Closed')),"
@@ -401,7 +409,7 @@ def hd1():
             {}, seq([("Move_to_Review", move(F_REVIEW)),
                      ("Terminate", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}})]))),
         ("Html_to_text", op("shared_conversionservice", "HtmlToText", {"Content": "@triggerOutputs()?['body/body']"})),
-        ("CleanBody", compose("@if(empty(" + strip_signature("body('Html_to_text')") + "),substring(body('Html_to_text'),0,min(length(body('Html_to_text')),2000))," + strip_signature("body('Html_to_text')") + ")")),
+        ("CleanBody", compose("@" + clean_text("body('Html_to_text')"))),
         # safety net: no [IT-n] in the subject, but the subject or body names IT-n (first occurrence; digits only)
         ("RefPart", compose(f"@concat(coalesce(split(toUpper(concat(coalesce({T},''),' ',coalesce(body('Html_to_text'),''))),'IT-')?[1],''),'     ')")),
         ("RefNum", compose("@if(not(contains('0123456789',substring(outputs('RefPart'),0,1))),0,"
