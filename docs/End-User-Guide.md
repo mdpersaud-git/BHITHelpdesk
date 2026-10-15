@@ -25,7 +25,7 @@ Use the **IT Support** form link in the confirmation email or the Teams message.
 
 1. **Confirmation** – you get an email and a Teams message from **IT Support** with your ticket number (IT-123).
 2. **Updates** – whenever IT changes the status you are told by email and in Teams.
-3. **Questions from IT** – if IT needs more information (status *Waiting for Client*), reply to the email or reply in the IT Support chat in Teams. Your reply goes straight to the ticket.
+3. **Questions from IT** – if IT needs more information (status *Waiting for End User*), reply to the email or reply in the IT Support chat in Teams. Your reply goes straight to the ticket.
 4. **Fixed?** – when IT thinks it's solved, the status becomes *Resolved Pending Confirmation*.
    - If it's fixed: nothing to do.
    - If it's **not** fixed: reply to the email or Teams message within a day.
@@ -39,7 +39,7 @@ Use the **IT Support** form link in the confirmation email or the Teams message.
 | Assigned | A technician has been given your ticket |
 | In Progress | IT has started working on it |
 | Escalated or Waiting Internally | IT has asked another team for help |
-| Waiting for Client | IT needs information from you |
+| Waiting for End User | IT needs information from you |
 | To Be Scheduled | IT wants to book a time with you |
 | Resolved Pending Confirmation | IT believes it's fixed and is waiting for you to confirm |
 | Closed | Done |

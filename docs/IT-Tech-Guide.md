@@ -34,7 +34,7 @@ In the **Report an IT issue** app, fill in **On behalf of** with the person's Br
 | Assigned | Given to a tech | Running |
 | In Progress | You are working it | Running |
 | Escalated or Waiting Internally | Waiting on another internal team | Running |
-| Waiting for Client | You need info from the requester | Paused |
+| Waiting for End User | You need info from the requester | Paused |
 | To Be Scheduled | Booking a time with the requester | Paused |
 | Resolved Pending Confirmation | Fix delivered, awaiting confirmation | Stopped |
 | Closed | Finished | Stopped |

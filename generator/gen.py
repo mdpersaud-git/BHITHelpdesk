@@ -41,7 +41,7 @@ APIS = {
 
 # ---------- statuses ----------
 S_OPEN, S_ASSIGNED, S_PROG, S_ESC = "Open", "Assigned", "In Progress", "Escalated or Waiting Internally"
-S_WAIT, S_SCHED, S_RES, S_CLOSED = "Waiting for Client", "To Be Scheduled", "Resolved Pending Confirmation", "Closed"
+S_WAIT, S_SCHED, S_RES, S_CLOSED = "Waiting for End User", "To Be Scheduled", "Resolved Pending Confirmation", "Closed"
 STATUSES = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC, S_WAIT, S_SCHED, S_RES, S_CLOSED]
 WORKING = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC]          # SLA clock runs
 MEANING = {
@@ -192,7 +192,7 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
         {"type": "TextBlock", "text": "New status", "weight": "Bolder"},
         {"type": "Input.ChoiceSet", "id": "status_choice", "style": "compact", "value": S_PROG,
          "choices": [{"title": x, "value": x} for x in STATUSES if x != S_OPEN]},
-        {"type": "TextBlock", "text": "Message (sent to the user for Waiting for Client and To Be Scheduled; "
+        {"type": "TextBlock", "text": "Message (sent to the user for Waiting for End User and To Be Scheduled; "
                                       "the resolution for Resolved; an internal note for Escalated)", "wrap": True, "size": "Small", "isSubtle": True},
         {"type": "Input.Text", "id": "status_text", "isMultiline": True, "placeholder": "Optional message"}]
     return {"type": "AdaptiveCard", "version": "1.2",
@@ -274,7 +274,7 @@ _ROWS = [("Open", "Status on newly created Ticket"),
          ("Assigned", "Ticket has been re-assigned to an IT Team Member"),
          ("In Progress", "IT Support has begun work on the Ticket"),
          ("Escalated or Waiting Internally", "IT Support has reached out for assistance from an internal team"),
-         ("Waiting for Client", "IT Support has requested further information from you"),
+         ("Waiting for End User", "IT Support has requested further information from you"),
          ("To Be Scheduled", "IT Support has requested to schedule a meeting with you"),
          ("Resolved Pending Confirmation", "IT Support has provided resolution and awaiting confirmation that issue has been resolved"),
          ("Closed", "Ticket has been resolved and closed")]
