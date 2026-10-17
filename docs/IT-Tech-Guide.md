@@ -19,8 +19,8 @@ Every new ticket then runs HD3: it sets permissions (the requester sees only the
 2. **Claim a ticket**: open it from the alert/Planner link, set **Assigned To** and move Status to *Assigned* then *In Progress*.
 3. **Work it**: keep Status accurate – it drives the SLA clock, the Planner bucket and the messages the requester receives.
 4. **Ask the requester a question**: use the card/reply action on the ticket thread in Teams. The question reaches them as an IT Support message and their answer (by Teams or email) is posted back on the ticket.
-5. **Resolve**: set Status to *Resolved Pending Confirmation* (or complete the Planner task). The requester is notified.
-6. The system **closes it automatically after 48 hours**, with a reminder to the requester at 24 hours. Set *Closed* yourself if they confirm earlier.
+5. **Resolve**: set Status to *Resolved Pending Confirmation* (or complete the Planner task), with a resolution written in the message box. The requester is notified, including your resolution text.
+6. The system **closes it automatically after 48 hours**, with a reminder to the requester at 24 hours. Set *Closed* yourself if they confirm earlier — **a resolution is required to close a ticket**: if none was captured yet (e.g. closing directly without going through Resolved Pending Confirmation), enter it in the message box when you set Status to Closed, or the flow will bounce it back to you and leave the ticket open.
 
 ## Logging a ticket for someone else
 

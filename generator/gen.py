@@ -603,7 +603,8 @@ def hd4():
 
     # Part C: the status changed
     note_html = f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
-    extra_html = (f"@{{if(equals({V},'{S_RES}'),concat('<p><b>Resolution:</b> ',coalesce({t('Resolution')},''),'</p><p>If this is not fixed, reply to this email within 2 days and your ticket will be reopened.</p>'),"
+    resolution_html = f"@{{if(and(contains({arr([S_RES, S_CLOSED])},{V}),not(empty(coalesce({t('Resolution')},'')))),concat('<p><b>Resolution:</b> ',{t('Resolution')},'</p>'),'')}}"
+    extra_html = (f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, reply to this email within 2 days and your ticket will be reopened.</p>',"
                   f"if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please reply to this email to respond to IT.</p>',"
                   f"if(equals({V},'{S_CLOSED}'),'<p>To raise this again, reply to this email or log a new ticket.</p>','')))}}")
     partC = seq([
@@ -611,19 +612,20 @@ def hd4():
             "id": f"@{t('PlannerTaskId')}", "body/bucketId": "@" + bucket_expr(V),
             "body/percentComplete": f"@if(contains({arr([S_RES, S_CLOSED])},{V}),100,if(equals({V},'{S_OPEN}'),0,50))"})})),
         ("Meanings", {**compose(MEANING), "runAfter": ra("Has_task_C", status=("Succeeded", "Failed", "Skipped"))}),
-        ("StatusLine", compose(f"@concat('[',{stamp},' | ',{who},'] Status: ',{V},if(equals({V},'{S_RES}'),concat(' · Resolution: ',coalesce({t('Resolution')},'')),''),decodeUriComponent('%0A%0A'),variables('varConversation'))")),
+        ("StatusLine", compose(f"@concat('[',{stamp},' | ',{who},'] Status: ',{V},if(contains({arr([S_RES, S_CLOSED])},{V}),concat(' · Resolution: ',coalesce({t('Resolution')},'')),''),decodeUriComponent('%0A%0A'),variables('varConversation'))")),
         ("Set_varConversation_status", {"type": "SetVariable", "inputs": {"name": "varConversation", "value": "@outputs('StatusLine')"}}),
         ("Has_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
             ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{V}}}: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
-                f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{V}}}</b>: @{{outputs('Meanings')?[{V}]}}.</p>"
-                + note_html + extra_html +
+                f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
+                + resolution_html + note_html + extra_html +
                 f"<p>You can view your ticket anytime in the {portal}.</p>" + details + earlier + "</div>")),
             ("Chat_status", {"type": "Scope", "runAfter": ra("Email_status", status=("Succeeded", "Failed")),
                 "actions": support_msg("Post_status", "@outputs('ReqEmail')",
-                    f"<p><b>IT-@{{{ID}}} is now @{{{V}}}</b></p><p>@{{outputs('Meanings')?[{V}]}}.</p><p style=\"color:#666\">@{{{t('Title')}}}</p>"
+                    f"<p><b>IT-@{{{ID}}} is now @{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
                     f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
-                    f"@{{if(equals({V},'{S_RES}'),concat('<p><b>Resolution:</b> ',coalesce({t('Resolution')},''),'</p><p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>'),if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
+                    + resolution_html +
+                    f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
                     + support_links(ID, t('Title')))}),
         ]))),
         ("Question_missing", {**cond(f"@and(contains({arr([S_WAIT, S_SCHED])},{V}),empty(coalesce({t('NoteToUser')},'')))", {
@@ -636,7 +638,7 @@ def hd4():
                 f"@{{if(empty(coalesce({t('AssignedTo/DisplayName')},'')),'',concat(' · IT: ',{t('AssignedTo/DisplayName')}))}}"
                 f" · updated by @{{{who}}}</p>"
                 f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p>Message to user: ',{t('NoteToUser')},'</p>'))}}"
-                f"@{{if(equals({V},'{S_RES}'),concat('<p>Resolution: ',coalesce({t('Resolution')},''),'</p>'),'')}}")}),
+                f"@{{if(contains({arr([S_RES, S_CLOSED])},{V}),concat('<p>Resolution: ',coalesce({t('Resolution')},''),'</p>'),'')}}")}),
             "runAfter": ra("Question_missing", status=("Succeeded", "Failed", "Skipped"))}),
     ])
 
@@ -979,15 +981,22 @@ def hd9():
                 "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
                 "item/NoteToUser": "@outputs('Text')"})}},
             "Case_status": {"case": "status", "actions": seq([
-                ("Set_status", sp("PatchItem", {
-                    "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
-                    "item/Status/Value": "@outputs('StatusChoice')",
-                    "item/AssignedTo/Claims": "@coalesce(body('Get_item')?['AssignedTo']?['Email'],outputs('Responder'))",
-                    "item/NoteToUser": f"@if(and(contains({arr([S_WAIT, S_SCHED])},outputs('StatusChoice')),not(empty(outputs('Text')))),outputs('Text'),null)",
-                    "item/Resolution": f"@if(equals(outputs('StatusChoice'),'{S_RES}'),outputs('Text'),body('Get_item')?['Resolution'])"})),
-                ("Internal_note", cond(f"@and(equals(outputs('StatusChoice'),'{S_ESC}'),not(empty(outputs('Text'))),not(empty(coalesce(body('Get_item')?['ChannelMessageId'],''))))", {
-                    "Post_internal_note": channel_reply("@body('Get_item')?['ChannelMessageId']",
-                        "<p><b>Internal note</b> (not sent to the user): @{outputs('Text')}</p>")})),
+                ("NewResolution", compose(f"@if(and(contains({arr([S_RES, S_CLOSED])},outputs('StatusChoice')),not(empty(outputs('Text')))),outputs('Text'),coalesce(body('Get_item')?['Resolution'],''))")),
+                ("Needs_resolution", compose(f"@and(equals(outputs('StatusChoice'),'{S_CLOSED}'),empty(outputs('NewResolution')))")),
+                ("Status_update", cond("@outputs('Needs_resolution')", {
+                    "Say_need_resolution": scope_msg("Need_res_msg", "@outputs('Responder')",
+                        "<p>IT-@{outputs('TicketId')} wasn't closed — a resolution is required. Use <b>Update status</b>, choose Closed again, and enter the resolution in the message box.</p>")},
+                    seq([
+                        ("Set_status", sp("PatchItem", {
+                            "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
+                            "item/Status/Value": "@outputs('StatusChoice')",
+                            "item/AssignedTo/Claims": "@coalesce(body('Get_item')?['AssignedTo']?['Email'],outputs('Responder'))",
+                            "item/NoteToUser": f"@if(and(contains({arr([S_WAIT, S_SCHED])},outputs('StatusChoice')),not(empty(outputs('Text')))),outputs('Text'),null)",
+                            "item/Resolution": "@outputs('NewResolution')"})),
+                        ("Internal_note", cond(f"@and(equals(outputs('StatusChoice'),'{S_ESC}'),not(empty(outputs('Text'))),not(empty(coalesce(body('Get_item')?['ChannelMessageId'],''))))", {
+                            "Post_internal_note": channel_reply("@body('Get_item')?['ChannelMessageId']",
+                                "<p><b>Internal note</b> (not sent to the user): @{outputs('Text')}</p>")})),
+                    ]))),
             ])}},
             "default": {"actions": {}}}),
     ])
