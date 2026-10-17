@@ -25,7 +25,7 @@ Q_SHOT = "rcbdab21fdac14fd6bde6f7009de24d9e"
 TZ = "Eastern Standard Time"
 MARKER = "## Reply above this line ##"
 LIST_URL = SITE + "/Lists/Tickets/AllItems.aspx?FilterField1=ID&FilterValue1="  # tech view: formatted list showing one ticket
-REQ_URL = SITE + "/Lists/Tickets/Ticket.aspx?FilterField1=ID&FilterValue1="  # simple requester view
+REQ_URL = SITE + "/Lists/Tickets/DispForm.aspx?ID="  # read-only item page for requesters
 
 APIS = {
     'shared_office365users': ('office365users', 'Office 365 Users', '30b9b2951c534266941f276deb55839b'),
@@ -122,6 +122,8 @@ def chat(to, msg, after=None):
 
 SUPPORT = "IT_Support@branthaven.com"
 
+def scope_msg(prefix, to, html):
+    return {"type": "Scope", "runAfter": {}, "actions": support_msg(prefix, to, html)}
 def support_msg(prefix, to, html):
     """Message a requester 1:1 from the IT Support account (connection shared_teams_1).
     Returns {name: action} for a branch, or use .items() in a seq list."""
@@ -137,8 +139,8 @@ NEWISSUE_URL = "https://forms.office.com/Pages/ResponsePage.aspx?id=" + FORM1
 def support_links(ID, title_expr):
     mailto = f"mailto:{MBX}?subject=@{{encodeUriComponent(concat('[IT-',string({ID}),'] Reply: ',coalesce({title_expr},'')))}}"
     return (f"<p><a href=\"{REQ_URL}@{{{ID}}}\">View ticket</a> &nbsp;·&nbsp; <a href=\"{PORTAL_URL}\">My tickets</a>"
-            f" &nbsp;·&nbsp; <a href=\"{mailto}\">Reply by email</a> &nbsp;·&nbsp; <a href=\"{NEWISSUE_URL}\">Report a new issue</a></p>"
-            "<p style=\"color:#888;font-size:12px\">To add details or reply to IT, use Reply by email. To report a different problem, use Report a new issue. Messages typed in this chat aren't seen by IT.</p>")
+            f" &nbsp;·&nbsp; <a href=\"{mailto}\">Reply by email</a></p>"
+            "<p style=\"color:#888;font-size:12px\">To add details or reply to IT, reply in this chat or use Reply by email.</p>")
 
 def channel(msg, after=None):
     return op("shared_teams", "PostMessageToConversation",
@@ -197,6 +199,7 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
         {"type": "Input.Text", "id": "status_text", "isMultiline": True, "placeholder": "Optional message"}]
     return {"type": "AdaptiveCard", "version": "1.2",
         "body": [
+            {"type": "TextBlock", "text": "IT Support [Branthaven] - New Ticket", "weight": "Bolder", "size": "Small", "color": "Accent", "wrap": True},
             {"type": "TextBlock", "text": f"IT-@{{{ID}}}: @{{{title}}}", "weight": "Bolder", "size": "Medium", "wrap": True},
             {"type": "FactSet", "facts": [
                 {"title": "Requester", "value": f"@{{{req}}}"},
@@ -213,7 +216,7 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
             {"type": "Action.ShowCard", "title": "Note to user", "card": text_card(
                 [{"type": "Input.Text", "id": "note_text", "isMultiline": True, "placeholder": "Message the user sees by email and Teams"}], "note")},
             {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{LIST_URL}@{{{ID}}}"},
-            *([{"type": "Action.OpenUrl", "title": "View image", "url": f"{SITE}/Lists/Tickets/DispForm.aspx?ID=@{{{ID}}}", "isVisible": pic}] if pic else [])]}
+            *([{"type": "Action.OpenUrl", "title": "View image", "url": "@{outputs('PicUrl')}", "isVisible": pic}] if pic else [])]}
 
 def move(folder, after=None):
     return op("shared_office365", "MoveV2", {"messageId": "@triggerOutputs()?['body/id']", "folderPath": folder,
@@ -282,15 +285,15 @@ CONFIRM_BODY = (
     '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
     "<p>Hi @{first(split(trim(coalesce(§T§Requester/DisplayName'],first(split(outputs('ReqEmail'),'@')))),' '))},</p>"
     "<p><b>SUBJECT:</b> @{§T§Title']}<br><b>DESCRIPTION:</b> @{coalesce(§T§Details'],'')}</p>"
-    "@{if(outputs('HasPic'),'<p><b>IMAGE:</b> 1 image is attached to your ticket.</p>','')}"
+    "@{if(outputs('HasPic'),concat('<p><b>IMAGE:</b> <a href=\"',outputs('PicUrl'),'\">View the image attached to your ticket</a></p>'),'')}"
     "<p>This email was system generated for the purpose of communicating that the referenced Ticket Number has been created to record your contact with the IT Team. "
     "To keep you informed on the progress of your Ticket, you will receive ongoing automated emails and Teams messages when your IT Ticket Status changes as follows:</p>"
     '<table style="border-collapse:collapse;margin:8px 0 12px 0">'
     f"<tr><th {_TH}>TICKET STATUS</th><th {_TH}>MEANING</th></tr>"
     + "".join(f"<tr><td {_TD}>{a}</td><td {_TD}>{b}</td></tr>" for a, b in _ROWS) +
     "</table>"
-    f'<p>Please feel free to use our <a href="{PORTAL_URL}">Ticket Portal</a> anytime to view the Status of your Ticket. To add comments or attachments, reply to this email. To report a different problem, <a href="' + NEWISSUE_URL + '">submit a new request</a>.</p>'
-    "<p>You will also receive Teams messages from <b>IT Support</b>. Replies typed in that chat are not seen by IT. To reply to IT, reply to this email.</p>"
+    f'<p>Please feel free to use our <a href="{PORTAL_URL}">Ticket Portal</a> anytime to view the Status of your Ticket. To add comments or attachments, reply to this email or reply in the IT Support chat in Teams.</p>'
+    "<p>You will also receive Teams messages from <b>IT Support</b>. You can reply to IT in that chat or by replying to this email.</p>"
     "<p><b>TICKET NUMBER:</b> IT-@{§ID§}<br>"
     "<b>TICKET STATUS:</b> @{if(empty(coalesce(§T§AssignedTo/Email'],'')),'Open','Assigned')}<br>"
     "<b>TICKET CONTACT:</b> @{coalesce(§T§Requester/DisplayName'],outputs('ReqEmail'))} (@{outputs('ReqEmail')})<br>"
@@ -316,14 +319,14 @@ def clean_text(expr):
             f"substring({expr},0,min(length({expr}),2000))))")
 
 USER_CARD_TYPE = "ITHelpDeskUserCard"
-CHAT_NOTICE = "Please don't reply in this chat, as messages typed here aren't seen by IT. Use Reply to IT or the answer box above."
+CHAT_NOTICE = "To reply to IT, reply in this chat or use Reply by email."
 
 def user_card(ID, blocks, title_expr="triggerOutputs()?['body/Title']"):
     """Card sent to the requester in their Workflows chat. Replies go by email (HD1), because Teams
     does not pass card clicks from the Workflows chat to a flow."""
     body = [{"type": "TextBlock", "text": txt, "wrap": True, **({"weight": "Bolder", "size": "Medium"} if bold else {})}
             for txt, bold in blocks]
-    body.append({"type": "TextBlock", "text": CHAT_NOTICE.replace(" or the answer box above", ""), "wrap": True, "size": "Small", "isSubtle": True})
+    body.append({"type": "TextBlock", "text": CHAT_NOTICE, "wrap": True, "size": "Small", "isSubtle": True})
     mailto = (f"mailto:{MBX}?subject=@{{encodeUriComponent(concat('[IT-',string({ID}),'] Reply: ',coalesce({title_expr},'')))}}"
               )
     return {"type": "AdaptiveCard", "version": "1.2", "body": body,
@@ -352,7 +355,8 @@ def hd1():
         "item/Requester/Claims": "@outputs('Sender')",
         "item/RequesterEmail": "@outputs('Sender')",
         "item/Source/Value": "Email",
-        "item/Category/Value": "Uncategorised",
+        "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Email by ',outputs('Sender'),decodeUriComponent('%0A%0A'))",
+        "item/Category/Value": "Uncategorized",
         "item/Priority/Value": f"@if(contains(toLower(coalesce({T},'')),'urgent'),'High','Medium')",
         "item/Status/Value": S_OPEN,
     }
@@ -374,7 +378,7 @@ def hd1():
                                   "outputs('ReplyText'),decodeUriComponent('%0A%0A'),coalesce(" + gi + "?['Conversation'],''))")})),
         ("Apply_to_each", attach_loop("@outputs('TicketId')", None, "")),
         ("Has_a_tech", cond(f"@not(empty(coalesce({gi}?['AssignedTo']?['Email'],'')))", {
-            "Tell_the_tech": chat(f"@{{{gi}?['AssignedTo']?['Email']}}",
+            "Tell_the_tech": scope_msg("Tell_tech_msg", f"@{{{gi}?['AssignedTo']?['Email']}}",
                 f"<p>@{{triggerOutputs()?['body/from']}} replied on IT-@{{outputs('TicketId')}}:</p><p>@{{outputs('ReplyText')}}</p><p>{LT}</p>")})),
         ("Has_channel_post", cond(f"@not(empty(coalesce({gi}?['ChannelMessageId'],'')))", {
             "Reply_in_channel": channel_reply(f"@{gi}?['ChannelMessageId']",
@@ -447,6 +451,7 @@ def hd2():
             "item/Requester/Claims": f"@{R}?['responder']",
             "item/RequesterEmail": f"@toLower({R}?['responder'])",
             "item/Source/Value": "Teams form",
+            "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Teams form by ',toLower({R}?['responder']),decodeUriComponent('%0A%0A'))",
             "item/Status/Value": S_OPEN})),
         ("Has_a_screenshot", cond(f"@not(empty(coalesce({R}?['{Q_SHOT}'],'')))", {
             "Apply_to_each": {"runAfter": {}, "type": "Foreach", "foreach": f"@json({R}?['{Q_SHOT}'])",
@@ -488,10 +493,12 @@ def hd3():
         ("Update_task_details", op("shared_planner", "UpdateTaskDetails_V2", {
             "id": "@body('Create_a_task')?['id']",
             "body/description": (f"Requester: @{{outputs('ReqEmail')}}\nCategory: @{{{t('Category/Value')}}}\nPriority: @{{{t('Priority/Value')}}}\n"
-                                 f"Source: @{{{t('Source/Value')}}}\n\n@{{{t('Details')}}}\n\n{LIST_URL}@{{{ID}}}")})),
+                                 f"Source: @{{{t('Source/Value')}}}\n\n@{{{t('Details')}}}\n\n@{{if(outputs('HasPic'),concat('Image: ',outputs('PicUrl'),decodeUriComponent('%0A%0A')),'')}}{LIST_URL}@{{{ID}}}")})),
         ("Wait_for_attachment", {"type": "Wait", "inputs": {"interval": {"count": 10, "unit": "Second"}}}),
         ("Get_ticket", sp("GetItem", {"id": f"@{ID}"})),
         ("HasPic", compose("@equals(body('Get_ticket')?['{HasAttachments}'],true)")),
+        ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'22c09b0b-bbcd-42a9-9aeb-844d81089636')/items(@{{{ID}}})/AttachmentFiles")),
+        ("PicUrl", compose("@if(outputs('HasPic'),concat('https://branthavenhomes.sharepoint.com',coalesce(first(body('Get_attachments')?['value'])?['ServerRelativeUrl'],'')),'')")),
         ("IsOpenNow", compose(
             f"@and(greaterOrEquals(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),7),less(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),21))")),
         ("HoursLine", compose("@if(outputs('IsOpenNow'),'A technician will pick it up shortly.','Support hours are 7:00 am to 9:00 pm, every day. Your ticket will be actioned when support reopens at 7:00 am.')")),
@@ -503,7 +510,7 @@ def hd3():
                 "actions": support_msg("Send_confirmation_chat", "@outputs('ReqEmail')",
                     f"<p><b>IT-@{{{ID}}} created:</b> @{{{t('Title')}}}</p>"
                     f"<p>Status: @{{if(empty(coalesce({t('AssignedTo/Email')},'')),'Open','Assigned')}} · Urgency: @{{{t('Priority/Value')}}}</p>"
-                    "@{if(outputs('HasPic'),'<p>Image attached.</p>','')}"
+                    "@{if(outputs('HasPic'),concat('<p><a href=\"',outputs('PicUrl'),'\">View image</a></p>'),'')}"
                     "<p>You'll get a message here and an email each time the status changes.</p>" + support_links(ID, t('Title')))}),
         ]))),
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
@@ -515,7 +522,7 @@ def hd3():
             "item/RequesterEmail": "@outputs('ReqEmail')",
             "item/PlannerTaskId": "@body('Create_a_task')?['id']",
             "item/ChannelMessageId": "@body('Post_to_Help_Desk_channel')?['id']",
-            "item/Conversation": "@outputs('CreatedLine')"})),
+            "item/Conversation": f"@if(empty(coalesce({t('Conversation')},'')),outputs('CreatedLine'),{t('Conversation')})"})),
     ])
     # The requester's confirmation must not depend on Planner or the channel: the Planner steps sit in their own
     # scope, after the confirmation, and everything after them runs whether they worked or not.
@@ -539,7 +546,9 @@ def hd4():
     lnk = link(ID)
     V = "variables('varStatus')"
     stamp = f"convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm')"
-    who = f"coalesce({t('Editor/DisplayName')},'IT')"
+    # Changes made through the Teams card are saved by the IT Support account; credit the assigned tech instead
+    who = (f"if(equals(toLower(coalesce({t('Editor/Email')},'')),'{MBX.lower()}'),"
+           f"coalesce({t('AssignedTo/DisplayName')},'IT'),coalesce({t('Editor/DisplayName')},'IT'))")
     first = "outputs('FirstName')"
     portal = f'<a href="{PORTAL_URL}">Ticket Portal</a>'
     details = ("<p><b>TICKET NUMBER:</b> IT-@{" + ID + "}<br>"
@@ -618,7 +627,7 @@ def hd4():
                     + support_links(ID, t('Title')))}),
         ]))),
         ("Question_missing", {**cond(f"@and(contains({arr([S_WAIT, S_SCHED])},{V}),empty(coalesce({t('NoteToUser')},'')))", {
-            "Nudge_the_tech": chat(f"@{{coalesce({t('Editor/Email')},'{ME}')}}",
+            "Nudge_the_tech": scope_msg("Nudge_msg", f"@{{coalesce({t('Editor/Email')},'{ME}')}}",
                 f"<p>IT-@{{{ID}}} is set to @{{{V}}}, but no message was sent to the user. Add one with Note to user.</p><p>{lnk}</p>")}),
             "runAfter": ra("Has_requester", status=("Succeeded", "Failed", "Skipped"))}),
         ("Has_channel_post", {**cond(f"@not(empty(coalesce({t('ChannelMessageId')},'')))", {
@@ -698,9 +707,9 @@ def hd6():
         ("Unassigned_at_4_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),4))", {
             "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
         ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))", {
-            "Tell_me_unassigned_5h": chat(ME, f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
+            "Tell_me_unassigned_5h": scope_msg("Unassigned5h_msg", ME, f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
         ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))", {
-            "Tell_tech_open_days": chat(f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
+            "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                 f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
     ])
     for k in ("Unassigned_at_5_hours", "Open_a_full_business_day"):
@@ -734,12 +743,12 @@ def hd6():
                 ("Email_resolved_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: is your issue fixed? @{{{it('Title')}}}",
                     f"<p>{MARKER}</p><p>IT marked ticket IT-@{{{ID}}} as resolved: @{{{it('Title')}}}</p>"
                     f"<p><b>Resolution:</b> @{{coalesce({it('Resolution')},'')}}</p>"
-                    "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email within the next day and your ticket will be reopened. Otherwise it closes automatically 48 hours after it was resolved.</p>"
+                    "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email or reply in the IT Support chat in Teams within the next day and your ticket will be reopened. Otherwise it closes automatically 48 hours after it was resolved.</p>"
                     f"<p>{rlnk}</p>")),
                 ("Chat_resolved_reminder", {"type": "Scope", "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed")),
                     "actions": support_msg("Post_resolved_reminder", f"@{req}",
                         f"<p><b>Reminder: is IT-@{{{ID}}} fixed?</b></p><p>@{{{it('Title')}}}</p>"
-                        "<p>If it is fixed, no action is needed. If not, use Reply by email within the next day to reopen it. The ticket closes automatically 48 hours after it was resolved.</p>" + support_links(ID, it('Title')))}),
+                        "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. The ticket closes automatically 48 hours after it was resolved.</p>" + support_links(ID, it('Title')))}),
             ]))})),
     ])
     loop = {"type": "Foreach", "foreach": "@body('Get_items_Tickets')?['value']",
@@ -811,27 +820,72 @@ def hd8():
             "where": f"@greaterOrEquals(int(coalesce(item()?['SLAHours'],0)),{DAY_H})"}}),
         ("Append_tech", {"type": "AppendToArrayVariable", "inputs": {"name": "varByTech", "value": {
             "Technician": "@items('Apply_to_each_tech')", "Open": "@length(body('Filter_this_tech'))",
-            "Overdue": "@length(body('Filter_this_tech_overdue'))"}}}),
+            "Overdue": "@length(body('Filter_this_tech_overdue'))",
+            "Pct": "@div(mul(length(body('Filter_this_tech')),100),max(length(body('OpenNow')?['value']),1))"}}}),
     ])
     by_cat_loop = {"type": "Foreach", "foreach": "@outputs('Categories')", "actions": seq([
         ("Filter_this_category", {"type": "Query", "inputs": {"from": "@body('Opened')?['value']",
             "where": "@equals(item()?['Category']?['Value'],items('Apply_to_each_category'))"}}),
         ("Append_category", {"type": "AppendToArrayVariable", "inputs": {"name": "varByCategory", "value": {
-            "Category": "@items('Apply_to_each_category')", "Tickets": "@length(body('Filter_this_category'))"}}}),
+            "Category": "@items('Apply_to_each_category')", "Tickets": "@length(body('Filter_this_category'))",
+            "Pct": "@div(mul(length(body('Filter_this_category')),100),max(length(body('Opened')?['value']),1))"}}}),
     ])}
-    fname = "HelpDesk-@{" + nowET('yyyy-MM-dd') + "}"
+    fname = "IT Support Help Desk Report - @{" + nowET('MMMM d, yyyy') + "}"
+    ESC = lambda x: f"replace(replace(replace({x},'&','&amp;'),'<','&lt;'),'>','&gt;')"
+    LASTTECH = ("if(and(empty(coalesce(item()?['AssignedTo']?['Email'],'')),equals(item()?['Status']?['Value'],'Open')),'',if(not(empty(coalesce(item()?['AssignedTo']?['Email'],''))),coalesce(item()?['AssignedTo']?['DisplayName'],item()?['AssignedTo']?['Email']),"
+                "if(not(empty(coalesce(item()?['LastNotifiedTech'],''))),item()?['LastNotifiedTech'],"
+                "if(and(not(empty(coalesce(item()?['Editor']?['Email'],''))),not(contains(toLower(coalesce(item()?['Editor']?['Email'],'')),'it_support'))),coalesce(item()?['Editor']?['DisplayName'],item()?['Editor']?['Email']),''))))")
+    REQ = "if(empty(item()?['RequesterEmail']),coalesce(item()?['Author']?['DisplayName'],'Unknown'),item()?['RequesterEmail'])"
+    def td(expr, extra=""):
+        return f"'<td style=\"padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;{extra}\">',{expr},'</td>'"
+    def rowx(*cells):
+        return "@concat('<tr>'," + ",".join(cells) + ",'</tr>')"
+    def th(t, w=""):
+        return f"<td{w} style=\"padding:7px 10px;background:#f1f5f9;font-size:11px;font-weight:bold;color:#475569;text-transform:uppercase\">{t}</td>"
+    def bar(color):
+        return ("concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"',string(max(createArray(int(item()?['Pct']),2))),'%\" bgcolor=\"" + color + "\" style=\"background:" + color + ";border-top:10px solid " + color + ";height:0;font-size:1px;line-height:1px\"></td><td style=\"font-size:1px\">&nbsp;</td></tr></table>')")
+    def card(title, accent, count_expr, body_expr):
+        return ("<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:16px;border:1px solid #e2e8f0;border-collapse:collapse;page-break-inside:avoid;break-inside:avoid\">"
+                "<tr style=\"page-break-after:avoid\"><td style=\"background:#f8fafc;color:" + accent + ";border-top:5px solid " + accent + ";padding:9px 12px;font-size:15px;font-weight:bold;page-break-after:avoid\">" + title + count_expr + "</td></tr>"
+                "<tr><td style=\"background:#ffffff;padding:0\">" + body_expr + "</td></tr></table>")
+    def listbody(filt, headers, tbl, empty):
+        return ("@{if(equals(length(body('" + filt + "')),0),'<div style=\"padding:12px;font-size:13px;color:#64748b\">" + empty + "</div>',"
+                "concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + headers + "</tr>',outputs('" + tbl + "'),'</table>'))}")
+    def tile(label, value_expr, color, bg="#f8fafc"):
+        return ("<td width=\"33%\" style=\"padding:4px\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:" + bg + ";border:1px solid #e2e8f0;border-top:4px solid " + color + "\">"
+                "<tr><td style=\"padding:12px 14px\"><div style=\"font-size:30px;font-weight:bold;color:#0f172a;line-height:34px\">" + value_expr + "</div>"
+                "<div style=\"font-size:12px;color:#64748b;text-transform:uppercase;margin-top:2px\">" + label + "</div></td></tr></table></td>")
+    n_over = "@{length(body('Filter_overdue'))}"
+    n_un = "@{length(body('Filter_unassigned'))}"
     report = (
-        "<html><body style=\"font-family:Arial,sans-serif\">"
-        "<h2>IT help desk daily report, @{" + nowET('dddd MMMM d, yyyy') + "}</h2>"
-        "<table border=\"1\" cellpadding=\"6\" style=\"border-collapse:collapse\"><tr><th>Opened today</th><th>Closed today</th><th>Open now</th><th>Average time to close (hours)</th></tr>"
-        "<tr><td>@{length(body('Opened')?['value'])}</td><td>@{length(body('ResolvedToday')?['value'])}</td><td>@{length(body('OpenNow')?['value'])}</td>"
-        "<td>@{formatNumber(outputs('Average'),'0.0')}</td></tr></table>"
-        "<h3>Needs attention: overdue</h3>" + or_none("overdue", "Nothing overdue") +
-        "<h3>Needs attention: unassigned</h3>" + or_none("unassigned", "Nothing unassigned") +
-        "<h3>Waiting on users</h3>" + or_none("waiting", "Nobody is waiting") +
-        "<h3>Open tickets by technician</h3>@{body('Table_by_tech')}"
-        "<h3>Today's tickets by category</h3>@{body('Table_by_category')}"
-        "</body></html>")
+        "<html><body style=\"margin:0;padding:0;background:#eef2f7;font-family:Arial,sans-serif\">"
+        "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#eef2f7\"><tr><td align=\"center\" style=\"padding:16px\">"
+        "<table width=\"680\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:680px;max-width:100%\">"
+        "<tr><td style=\"background:#ffffff;color:#0f2a4a;padding:18px 20px;border-top:6px solid #0f2a4a;border-bottom:1px solid #e2e8f0\">"
+        "<div style=\"font-size:20px;font-weight:bold\">IT Support [Branthaven]</div>"
+        "<div style=\"font-size:13px;color:#475569;margin-top:3px\">Daily report &middot; @{" + nowET('dddd MMMM d, yyyy') + "}</div></td></tr>"
+        "<tr><td style=\"padding:10px 0 0 0\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+        "<tr>" + tile("Opened today", "@{length(body('Opened')?['value'])}", "#2563eb")
+               + tile("Closed today", "@{length(body('ResolvedToday')?['value'])}", "#16a34a")
+               + tile("Open now", "@{length(body('OpenNow')?['value'])}", "#0f2a4a") + "</tr>"
+        "<tr>" + tile("Overdue", n_over, "#dc2626", "@{if(equals(length(body('Filter_overdue')),0),'#f8fafc','#fef2f2')}")
+               + tile("Unassigned 4h+", n_un, "#f59e0b", "@{if(equals(length(body('Filter_unassigned')),0),'#f8fafc','#fffbeb')}")
+               + tile("Avg hours to close", "@{formatNumber(outputs('Average'),'0.0')}", "#7c3aed") + "</tr>"
+        "</table></td></tr>"
+        "<tr><td>"
+        + card("Overdue", "#dc2626", " (" + n_over + ")",
+               listbody("Filter_overdue", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Assigned / last touched by") + th("Days open", " width=\"60\""), "Table_overdue", "Nothing overdue"))
+        + card("Unassigned", "#d97706", " (" + n_un + ")",
+               listbody("Filter_unassigned", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Hours", " width=\"50\""), "Table_unassigned", "Nothing unassigned"))
+        + card("Waiting on users", "#7c3aed", " (@{length(body('Filter_waiting'))})",
+               listbody("Filter_waiting", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Status") + th("Assigned / last touched by") + th("Days waiting", " width=\"70\""), "Table_waiting", "Nobody is waiting"))
+        + card("Open IT Tickets", "#0f2a4a", "",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + th("IT Support") + th("Workload", " width=\"220\"") + th("Open", " width=\"45\"") + th("Overdue", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
+        + card("Today's tickets by category", "#2563eb", "",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + th("Category") + th("Share", " width=\"220\"") + th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
+        + "</td></tr>"
+        "<tr><td style=\"padding:14px 4px;font-size:11px;color:#94a3b8\">Overdue = open more than one business day. Business hours run 7:00 AM to 9:00 PM daily. Sent automatically by IT Support [Branthaven].</td></tr>"
+        "</table></td></tr></table></body></html>")
     actions = seq([
         ("DayStart", compose(
             f"@convertTimeZone(addHours(addDays(startOfDay(convertTimeZone(utcNow(),'UTC','{TZ}')),-1),21),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
@@ -870,10 +924,33 @@ def hd8():
          ("Convert_file", op("shared_onedriveforbusiness", "ConvertFile", {"id": "@body('Create_file_OneDrive')?['Id']", "type": "PDF"})),
          ("Create_file_Reports", op("shared_sharepointonline", "CreateFile", {
              "dataset": SITE, "folderPath": "/Reports", "name": fname + ".pdf", "body": "@body('Convert_file')"})),
-         ("Email_me_the_report", {**mail(ME, "Daily help desk report, @{" + nowET('dddd MMMM d') + "}", "@{outputs('ReportHtml')}",
+         ("Email_me_the_report", {**mail(ME, "IT Support Help Desk Report - @{" + nowET('MMMM d, yyyy') + "}", "@{outputs('ReportHtml')}",
              attachments=[{"Name": fname + ".pdf", "ContentBytes": "@body('Convert_file')"}]),
              "runAfter": ra("Create_file_Reports", status=("Succeeded", "Failed"))}),
          ])
+    def setsel(name, expr):
+        actions[name]["inputs"]["select"] = expr
+    setsel("Select_overdue", rowx(
+        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
+        td(LASTTECH), td(f"div(int(coalesce(item()?['SLAHours'],0)),{DAY_H})", "font-weight:bold;color:#dc2626;")))
+    setsel("Select_unassigned", rowx(
+        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
+        td("string(item()?['SLAHours'])", "font-weight:bold;color:#d97706;")))
+    setsel("Select_waiting", rowx(
+        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
+        td("coalesce(item()?['Status']?['Value'],'')"), td(LASTTECH), td(f"div(int(coalesce(item()?['WaitingHours'],0)),{DAY_H})")))
+    for nm in ("overdue", "unassigned", "waiting"):
+        actions["Table_" + nm]["type"] = "Compose"
+        actions["Table_" + nm]["inputs"] = f"@join(body('Select_{nm}'),'')"
+    actions["Table_by_tech"]["type"] = "Select"
+    actions["Table_by_tech"]["inputs"] = {"from": "@variables('varByTech')", "select": rowx(
+        td("if(or(equals(item()?['Technician'],'Unassigned'),contains(toLower(item()?['Technician']),'it_support')),'',item()?['Technician'])", "font-weight:bold;"),
+        td(bar("#2563eb")), td("string(item()?['Open'])", "font-weight:bold;"),
+        td("string(item()?['Overdue'])", "color:#dc2626;font-weight:bold;"))}
+    actions["Table_by_category"]["type"] = "Select"
+    actions["Table_by_category"]["inputs"] = {"from": "@variables('varByCategory')", "select": rowx(
+        td("coalesce(item()?['Category'],'Uncategorized')", "font-weight:bold;"),
+        td(bar("#7c3aed")), td("string(item()?['Tickets'])", "font-weight:bold;"))}
     return "HD8 Daily report", {"Recurrence": recurrence([21], ALLDAYS)}, actions
 
 # ---------- HD9 Card actions ----------
@@ -936,7 +1013,7 @@ def hd10():
         {"type": "TextBlock", "text": f"**Subject:** @{{{t('Title')}}}", "wrap": True},
         {"type": "TextBlock", "text": f"**From IT:** @{{{t('TeamsQuestion')}}}", "wrap": True},
         {"type": "Input.Text", "id": "answer", "isMultiline": True, "placeholder": "Type your answer"},
-        {"type": "TextBlock", "text": "Answer in the box above and select Send answer. Messages typed in this chat aren't seen by IT.", "wrap": True, "size": "Small", "isSubtle": True}],
+        {"type": "TextBlock", "text": "Answer in the box above and select Send answer, or reply in this chat.", "wrap": True, "size": "Small", "isSubtle": True}],
         "actions": [{"type": "Action.Submit", "title": "Send answer"},
                     {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{REQ_URL}@{{{ID}}}"}]}
     who = "coalesce(body('Get_responder')?['displayName'],outputs('ReqEmail'))"
@@ -1026,7 +1103,7 @@ def hd12():
             f"<p>Thanks, your message was added to <b>IT-@{{{TID}}}</b>"
             f"@{{if(equals(outputs('NewStatus'),{tk}?['Status']?['Value']),'',concat(' and the ticket is back with IT (',outputs('NewStatus'),')'))}}.</p>")),
         ("Has_a_tech", {**cond(f"@not(empty(coalesce({tk}?['AssignedTo']?['Email'],'')))", {
-            "Tell_the_tech": chat(f"@{{{tk}?['AssignedTo']?['Email']}}",
+            "Tell_the_tech": scope_msg("Tell_tech_msg", f"@{{{tk}?['AssignedTo']?['Email']}}",
                 f"<p>@{{{who}}} replied on IT-@{{{TID}}} in Teams:</p><p>@{{outputs('ReplyText')}}</p><p>{link(TID)}</p>")}),
             "runAfter": ra("Thank_requester", status=("Succeeded", "Failed"))}),
         ("Has_channel_post", {**cond(f"@not(empty(coalesce({tk}?['ChannelMessageId'],'')))", {
@@ -1080,9 +1157,9 @@ def hd12():
         ("From_a_person", cond(f"@not(empty(coalesce({M}?['from']?['user']?['id'],'')))", person)),
     ])
     trig = {"When_someone_messages_IT_Support": {"type": "OpenApiConnectionWebhook",
-        "inputs": {"parameters": {"threadType": "groupchat"},
+        "inputs": {"parameters": {},
                    "host": {"apiId": "/providers/Microsoft.PowerApps/apis/shared_teams", "connectionName": "shared_teams_1",
-                            "operationId": "WebhookNewMessageTrigger"},
+                            "operationId": "WebhookChatMessageTrigger"},
                    "authentication": "@parameters('$authentication')"}}}
     return "HD12 Requester replies in Teams", trig, actions
 
@@ -1123,6 +1200,7 @@ def hd14():
             "item/Requester/Claims": "@outputs('Requester')",
             "item/RequesterEmail": "@outputs('Requester')",
             "item/Source/Value": "Teams form",
+            "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Teams form by ',outputs('Requester'),decodeUriComponent('%0A%0A'))",
             "item/Status/Value": S_OPEN})),
         ("Has_a_screenshot", cond("@contains(coalesce(triggerBody()?['text_5'],''),'base64,')", {
             "Shot_clean": compose("@replace(triggerBody()?['text_5'],'\"','')"),
@@ -1135,6 +1213,153 @@ def hd14():
                        "schema": {"type": "object", "properties": {"ticketid": {"title": "ticketid", "x-ms-dynamically-added": True, "type": "string"}}}}}),
     ])
     return "HD14 Teams app intake", trig, acts
+
+
+# ---------- HD15 Dashboard stats (feeds the DashStats list behind the SharePoint dashboard) ----------
+DASH = "24631152-bdde-4654-82a4-d64bb0bb9b3b"
+def hd15():
+    ST7 = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC, S_WAIT, S_SCHED, S_RES]
+    PR3 = ["High", "Medium", "Low"]
+    CAT13 = ["Access Request", "Application", "Email", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)",
+             "Mouse / Keyboard / Monitor", "New User Setup", "Other", "Password or Sign-In", "Printer", "Teams", "Uncategorized"]
+    conc1 = {"runtimeConfiguration": {"concurrency": {"repetitions": 1}}}
+    def chart(p, src, field, names, item_id, sub_total=None):
+        key = f"item()?['{field}']?['Value']"
+        if field == "Category":
+            where = f"@or(equals({key},items('Foreach_{p}')),and(equals(items('Foreach_{p}'),'Uncategorized'),or(empty({key}),equals({key},'Uncategorised'))))"
+        else:
+            where = f"@equals({key},items('Foreach_{p}'))"
+        loop = {"type": "Foreach", "foreach": "@" + arr(names), "actions": seq([
+            (f"Count_{p}", {"type": "Query", "inputs": {"from": f"@body('{src}')", "where": where}}),
+            (f"Label_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varLabels", "value":
+                f"@if(equals(length(body('Count_{p}')),0),'',concat(items('Foreach_{p}'),'  ',string(length(body('Count_{p}')))))"}}),
+            (f"Share_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varShares", "value":
+                f"@float(formatNumber(div(mul(float(length(body('Count_{p}'))),100),float(max(length(body('{src}')),1))),'0.00'))"}}),
+        ]), **conc1}
+        item = {"id": item_id, "item/Title": {"Status": "Status", "Priority": "Priority", "Category": "Category"}[field],
+                "item/Total": f"@length(body('{src}'))"}
+        for i in range(14):
+            item[f"item/Slot{i+1}"] = f"@coalesce(variables('varLabels')?[{i}],'')"
+            item[f"item/Share{i+1}"] = f"@coalesce(variables('varShares')?[{i}],0)"
+        return [
+            (f"Reset_{p}_labels", {"type": "SetVariable", "inputs": {"name": "varLabels", "value": []}}),
+            (f"Reset_{p}_shares", {"type": "SetVariable", "inputs": {"name": "varShares", "value": []}}),
+            (f"Foreach_{p}", loop),
+            (f"Update_{p}", sp("PatchItem", {"table": DASH, **item})),
+        ]
+    d30 = "ticks(addDays(utcNow(),-30))"
+    def ranked(p, src, keyexpr, item_id, title, sub, n, total_src):
+        loop = {"type": "Foreach", "foreach": f"@outputs('Distinct_{p}')", "actions": seq([
+            (f"Count_{p}", {"type": "Query", "inputs": {"from": f"@body('Keys_{p}')", "where": f"@equals(item(),items('Foreach_{p}'))"}}),
+            (f"Add_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varRanks", "value":
+                {"n": f"@length(body('Count_{p}'))", "l": f"@items('Foreach_{p}')"}}}),
+        ]), **conc1}
+        srt = f"outputs('Sorted_{p}')"
+        item = {"id": item_id, "item/Title": title, "item/Sub": sub, "item/Total": f"@length(body('{total_src}'))"}
+        for i in range(n):
+            item[f"item/Slot{i+1}"] = f"@if(greater(length({srt}),{i}),concat({srt}?[{i}]?['l'],'  ',string({srt}?[{i}]?['n'])),'')"
+            item[f"item/Share{i+1}"] = (f"@if(greater(length({srt}),{i}),float(formatNumber(div(mul(float({srt}?[{i}]?['n']),100),"
+                                        f"float({srt}?[0]?['n'])),'0.00')),0)")
+        return [
+            (f"Keys_{p}", {"type": "Select", "inputs": {"from": f"@body('{src}')", "select": "@" + keyexpr}}),
+            (f"Distinct_{p}", {"type": "Compose", "inputs": f"@union(body('Keys_{p}'),body('Keys_{p}'))"}),
+            (f"Reset_{p}", {"type": "SetVariable", "inputs": {"name": "varRanks", "value": []}}),
+            (f"Foreach_{p}", loop),
+            (f"Sorted_{p}", {"type": "Compose", "inputs": f"@take(reverse(sort(variables('varRanks'),'n')),{n})"}),
+            (f"Update_{p}", sp("PatchItem", {"table": DASH, **item})),
+        ]
+    def trend():
+        day = "formatDateTime(addDays(convertTimeZone(utcNow(),'UTC','" + TZ + "'),sub(items('Foreach_trend'),29)),'yyyy-MM-dd')"
+        lab = ("if(equals(items('Foreach_trend'),29),'Today',if(equals(mod(sub(29,items('Foreach_trend')),5),0),"
+               "formatDateTime(addDays(convertTimeZone(utcNow(),'UTC','" + TZ + "'),sub(items('Foreach_trend'),29)),'MMM d'),''))")
+        loop = {"type": "Foreach", "foreach": "@range(0,30)", "actions": seq([
+            ("Count_trend", {"type": "Query", "inputs": {"from": "@body('Days_trend')", "where": f"@equals(item(),{day})"}}),
+            ("Label_trend", {"type": "AppendToArrayVariable", "inputs": {"name": "varLabels", "value": "@" + lab}}),
+            ("Share_trend", {"type": "AppendToArrayVariable", "inputs": {"name": "varShares", "value": "@length(body('Count_trend'))"}}),
+        ]), **conc1}
+        item = {"id": 6, "item/Title": "Trend", "item/Sub": "Tickets opened per day, last 30 days",
+                "item/Total": "@length(body('Days_trend'))", "item/OpenCount": "@max(variables('varShares'))"}
+        for i in range(30):
+            item[f"item/Slot{i+1}"] = f"@coalesce(variables('varLabels')?[{i}],'')"
+            item[f"item/Share{i+1}"] = f"@coalesce(variables('varShares')?[{i}],0)"
+        return [
+            ("Days_trend", {"type": "Select", "inputs": {"from": "@body('Created_30')",
+                "select": "@formatDateTime(convertTimeZone(item()?['Created'],'UTC','" + TZ + "'),'yyyy-MM-dd')"}}),
+            ("Reset_trend_labels", {"type": "SetVariable", "inputs": {"name": "varLabels", "value": []}}),
+            ("Reset_trend_shares", {"type": "SetVariable", "inputs": {"name": "varShares", "value": []}}),
+            ("Foreach_trend", loop),
+            ("Update_trend", sp("PatchItem", {"table": DASH, **item})),
+        ]
+    def service():
+        pct = lambda num, den: (f"@if(equals(length(body('{den}')),0),-1,div(add(mul(length(body('{num}')),100),"
+                                f"div(length(body('{den}')),2)),length(body('{den}'))))")
+        item = {"id": 7, "item/Title": "Service", "item/Sub": "Service levels, last 30 days",
+                "item/Share1": pct("Resp_ok", "Resp_elig"), "item/Slot1": "Responded within 4 h",
+                "item/Slot4": "@concat(string(length(body('Resp_ok'))),' of ',string(length(body('Resp_elig'))),' tickets')",
+                "item/Share2": pct("Res_ok", "Resolved_30"), "item/Slot2": "Resolved within 24 h",
+                "item/Slot5": "@if(equals(length(body('Resolved_30')),0),'no resolved tickets yet',concat(string(length(body('Res_ok'))),' of ',string(length(body('Resolved_30'))),' tickets'))",
+                "item/Share3": "@if(equals(length(body('Responded')),0),-1,div(variables('varSumMin'),length(body('Responded'))))",
+                "item/Slot3": "Average first response",
+                "item/Slot6": "@concat(string(length(body('Responded'))),' tickets answered')"}
+        return [
+            ("Resp_elig", {"type": "Query", "inputs": {"from": "@body('Created_30')", "where":
+                "@if(empty(item()?['FirstResponseOn']),less(ticks(item()?['Created']),ticks(addHours(utcNow(),-4))),true)"}}),
+            ("Resp_ok", {"type": "Query", "inputs": {"from": "@body('Resp_elig')", "where":
+                "@if(empty(item()?['FirstResponseOn']),false,lessOrEquals(sub(ticks(item()?['FirstResponseOn']),ticks(item()?['Created'])),144000000000))"}}),
+            ("Responded", {"type": "Query", "inputs": {"from": "@body('Created_30')", "where": "@not(empty(item()?['FirstResponseOn']))"}}),
+            ("Resp_minutes", {"type": "Select", "inputs": {"from": "@body('Responded')",
+                "select": "@div(sub(ticks(item()?['FirstResponseOn']),ticks(item()?['Created'])),600000000)"}}),
+            ("Reset_sum", {"type": "SetVariable", "inputs": {"name": "varSumMin", "value": 0}}),
+            ("Foreach_sum", {"type": "Foreach", "foreach": "@body('Resp_minutes')", "actions": seq([
+                ("Add_sum", {"type": "IncrementVariable", "inputs": {"name": "varSumMin", "value": "@items('Foreach_sum')"}})]), **conc1}),
+            ("Resolved_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']", "where":
+                f"@if(empty(item()?['ResolvedOn']),false,greaterOrEquals(ticks(item()?['ResolvedOn']),{d30}))"}}),
+            ("Res_ok", {"type": "Query", "inputs": {"from": "@body('Resolved_30')", "where":
+                "@lessOrEquals(float(coalesce(item()?['ResolvedHours'],0)),24)"}}),
+            ("Update_service", sp("PatchItem", {"table": DASH, **item})),
+        ]
+    catkey = "if(or(empty(item()?['Category']?['Value']),equals(item()?['Category']?['Value'],'Uncategorised')),'Uncategorized',item()?['Category']?['Value'])"
+    acts = seq([
+        ("Init_varLabels", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varLabels", "type": "array", "value": []}]}}),
+        ("Init_varShares", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varShares", "type": "array", "value": []}]}}),
+        ("Init_varRanks", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varRanks", "type": "array", "value": []}]}}),
+        ("Init_varSumMin", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varSumMin", "type": "integer", "value": 0}]}}),
+        ("All_tickets", sp("GetItems", {"$top": 5000})),
+        ("Open_all", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
+            "where": f"@not(equals(item()?['Status']?['Value'],'{S_CLOSED}'))"}}),
+        ("Open_working", {"type": "Query", "inputs": {"from": "@body('Open_all')",
+            "where": f"@not(equals(item()?['Status']?['Value'],'{S_RES}'))"}}),
+        ("Unassigned", {"type": "Query", "inputs": {"from": "@body('Open_working')",
+            "where": "@empty(coalesce(item()?['AssignedTo']?['Email'],''))"}}),
+        ("Overdue", {"type": "Query", "inputs": {"from": "@body('Open_working')",
+            "where": f"@greaterOrEquals(int(coalesce(item()?['SLAHours'],0)),{DAY_H})"}}),
+        ("Waiting", {"type": "Query", "inputs": {"from": "@body('Open_all')",
+            "where": f"@equals(item()?['Status']?['Value'],'{S_WAIT}')"}}),
+        ("Pending", {"type": "Query", "inputs": {"from": "@body('Open_all')",
+            "where": f"@equals(item()?['Status']?['Value'],'{S_RES}')"}}),
+        ("Closed_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
+            "where": f"@and(equals(item()?['Status']?['Value'],'{S_CLOSED}'),greaterOrEquals(ticks(coalesce(item()?['ClosedOn'],'1970-01-01T00:00:00Z')),{d30}))"}}),
+        ("Created_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
+            "where": f"@greaterOrEquals(ticks(item()?['Created']),{d30})"}}),
+        ("Update_KPIs", sp("PatchItem", {"table": DASH, "id": 5, "item/Title": "KPIs",
+            "item/OpenCount": "@length(body('Open_working'))", "item/Unassigned": "@length(body('Unassigned'))",
+            "item/Overdue": "@length(body('Overdue'))", "item/Waiting": "@length(body('Waiting'))",
+            "item/Pending": "@length(body('Pending'))", "item/Closed30": "@length(body('Closed_30'))",
+            "item/Refreshed": f"@{nowET('h:mm tt')}"})),
+        *chart("status", "Open_all", "Status", ST7, 2),
+        *chart("priority", "Open_all", "Priority", PR3, 3),
+        *chart("category", "Created_30", "Category", CAT13, 4),
+        ("Created_7", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
+            "where": "@greaterOrEquals(ticks(item()?['Created']),ticks(addDays(utcNow(),-7)))"}}),
+        *trend(),
+        *service(),
+        *ranked("week", "Created_7", catkey, 8, "Week", "Busiest categories, last 7 days", 5, "Created_7"),
+        *ranked("workload", "Open_working", "coalesce(item()?['AssignedTo']?['DisplayName'],'Unassigned')", 9, "Workload", "Open tickets by IT", 8, "Open_working"),
+        *ranked("requesters", "Open_working", "coalesce(item()?['Requester']?['DisplayName'],'Unknown')", 10, "Requesters", "Open tickets by requester", 8, "Open_working"),
+    ])
+    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
+            "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 21)], "minutes": list(range(0, 60, 5))}}}}
+    return "HD15 Dashboard stats", trig, acts
 
 # ---------- packaging ----------
 def used_apis(obj, acc):
@@ -1218,7 +1443,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
