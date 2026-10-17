@@ -1158,6 +1158,24 @@ def hd12():
                 "runAfter": ra("Save_pending", status=("Succeeded", "Failed"))})]),
         {"Say_no_ticket": reply_here("Say_no_ticket",
             f"<p>I couldn't find an open ticket for you. To log a new request, email <a href=\"mailto:{MBX}\">{MBX}</a> or use the IT Support form in Teams.</p>")}), "runAfter": {}}}
+    # No open ticket matched, but there's a recently-closed one for this sender: start a follow-up
+    # ticket tagged to it, the same way HD1 does for an email reply to a closed ticket.
+    ck = "outputs('ClosedTicket')"
+    closed_followup = seq([
+        ("Create_followup_item", sp("PostItem", {
+            "item/Title": f"@concat('Follow-up: ',{ck}?['Title'])",
+            "item/Details": f"@concat('Follow-up to IT-',string({ck}?['ID']),'. ',outputs('ReplyText'))",
+            "item/Requester/Claims": "@outputs('SenderEmail')",
+            "item/RequesterEmail": "@outputs('SenderEmail')",
+            "item/Source/Value": "Teams message",
+            "item/Category/Value": f"@coalesce({ck}?['Category']?['Value'],'Uncategorized')",
+            "item/Priority/Value": f"@coalesce({ck}?['Priority']?['Value'],'Medium')",
+            "item/Conversation": f"@concat('[',{stamp},'] Ticket created from Teams message by ',outputs('SenderEmail'),' — follow-up to IT-',string({ck}?['ID']),decodeUriComponent('%0A%0A'))",
+            "item/Status/Value": S_OPEN})),
+        ("Tell_requester_followup", reply_here("Tell_requester_followup",
+            f"<p>IT-@{{{ck}?['ID']}} is closed, so I started a new ticket for this: <b>IT-@{{body('Create_followup_item')?['ID']}}</b>.</p><p>@{{outputs('ReplyText')}}</p>")),
+    ])
+    not_found_or_followup = {"Check_closed_ticket": cond(f"@not(empty({ck}))", closed_followup, not_found)}
     person = seq([
         ("Get_sender", op("shared_office365users", "UserProfile_V2", {"id": f"@{{{M}?['from']?['user']?['id']}}"})),
         ("SenderEmail", compose(f"@{sender}")),
@@ -1174,10 +1192,15 @@ def hd12():
                 ("Waiting", {"type": "Query", "inputs": {"from": "@body('Open_tickets')?['value']",
                     "where": f"@contains({arr([S_WAIT, S_SCHED, S_RES])},item()?['Status']?['Value'])"}}),
                 ("Ticket", compose("@if(not(empty(body('Named'))),first(body('Named')),if(equals(length(body('Open_tickets')?['value']),1),first(body('Open_tickets')?['value']),null))")),
+                ("Closed_tickets", sp("GetItems", {"$filter": f"RequesterEmail eq '@{{outputs('SenderEmail')}}' and Status eq '{S_CLOSED}' and Modified ge '@{{formatDateTime(addDays(utcNow(),-14),'yyyy-MM-ddTHH:mm:ssZ')}}'",
+                                                    "$orderby": "Modified desc", "$top": 20})),
+                ("Named_closed", {"type": "Query", "inputs": {"from": "@body('Closed_tickets')?['value']",
+                    "where": "@contains(concat(' ',toUpper(replace(replace(replace(replace(replace(replace(outputs('ReplyText'),'#',' '),'.',' '),',',' '),'?',' '),'!',' '),':',' ')),' '),concat('IT-',string(item()?['ID']),' '))"}}),
+                ("ClosedTicket", compose("@if(not(empty(body('Named_closed'))),first(body('Named_closed')),if(equals(length(body('Closed_tickets')?['value']),1),first(body('Closed_tickets')?['value']),null))")),
                 ("PendingFresh", compose("@if(and(not(empty(body('Get_pending')?['value'])),less(sub(ticks(utcNow()),ticks(first(body('Get_pending')?['value'])?['Created'])),864000000000)),first(body('Get_pending')?['value']),null)")),
                 ("IsBare", compose("@and(not(empty(outputs('Ticket'))),not(empty(outputs('PendingFresh'))),equals(replace(replace(replace(toUpper(outputs('ReplyText')),' ',''),'#',''),'.',''),concat('IT-',string(outputs('Ticket')?['ID']))))")),
                 ("FinalText", compose("@if(outputs('IsBare'),outputs('PendingFresh')?['ReplyText'],outputs('ReplyText'))")),
-                ("Ticket_found", cond(f"@not(empty({tk}))", found, not_found)),
+                ("Ticket_found", cond(f"@not(empty({tk}))", found, not_found_or_followup)),
             ]))),
         ]))),
     ])

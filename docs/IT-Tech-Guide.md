@@ -47,6 +47,10 @@ Status changes automatically notify the requester (email + Teams) and move the P
 - **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours). Review it each morning.
 - **HD7:** a requester can ask for "My open tickets" and gets a list.
 
+## Reply to a closed ticket
+
+If someone replies — by email or in the Teams chat — to a ticket that's already Closed, the system doesn't reopen it. It starts a **new ticket** instead, tagged "Follow-up to IT-<old number>" in Details, and (via Teams) titled "Follow-up: <old title>" with the same Category/Priority carried over. The old ticket stays closed as the record of what was done; work the new one like any other.
+
 ## Rules of the road
 
 - Only the list owner edits the Tickets list structure; techs work tickets through the ticket form/Planner.

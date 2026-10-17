@@ -31,6 +31,10 @@ Use the **IT Support** form link in the confirmation email or the Teams message.
    - If it's **not** fixed: reply to the email or Teams message within a day.
    - You get a reminder after 24 hours. The ticket closes automatically 48 hours after it was resolved.
 
+## Issue came back after your ticket was closed?
+
+Reply to the closed ticket's email, or reply in the IT Support chat in Teams, either way. We'll start a fresh ticket for you and tag it to the original so IT has the history.
+
 ## Ticket statuses
 
 | Status | What it means |
