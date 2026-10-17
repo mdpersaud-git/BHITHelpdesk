@@ -362,7 +362,9 @@ def hd1():
     }
     followup = dict(new_item)
     followup["item/Details"] = ("@if(equals(body('Get_item')?['Status']?['Value'],'Closed'),"
-                                "concat('Follow-up to IT-',string(outputs('TicketId')),'. ',outputs('ReplyText')),outputs('CleanBody'))")
+                                "concat('Follow-up to IT-',string(outputs('TicketId')),'. ',outputs('ReplyText'),"
+                                "if(empty(coalesce(body('Get_item')?['Resolution'],'')),'',concat(decodeUriComponent('%0A%0A'),"
+                                "'Previous resolution (IT-',string(outputs('TicketId')),'): ',body('Get_item')?['Resolution']))),outputs('CleanBody'))")
 
     gi = "body('Get_item')"
     LT = link("outputs('TicketId')")
@@ -1164,7 +1166,9 @@ def hd12():
     closed_followup = seq([
         ("Create_followup_item", sp("PostItem", {
             "item/Title": f"@concat('Follow-up: ',{ck}?['Title'])",
-            "item/Details": f"@concat('Follow-up to IT-',string({ck}?['ID']),'. ',outputs('ReplyText'))",
+            "item/Details": (f"@concat('Follow-up to IT-',string({ck}?['ID']),'. ',outputs('ReplyText'),"
+                              f"if(empty(coalesce({ck}?['Resolution'],'')),'',concat(decodeUriComponent('%0A%0A'),"
+                              f"'Previous resolution (IT-',string({ck}?['ID']),'): ',{ck}?['Resolution'])))"),
             "item/Requester/Claims": "@outputs('SenderEmail')",
             "item/RequesterEmail": "@outputs('SenderEmail')",
             "item/Source/Value": "Teams message",
