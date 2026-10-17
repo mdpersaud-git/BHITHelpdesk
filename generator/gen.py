@@ -645,6 +645,25 @@ def hd4():
     def var(name, typ, val):
         return {"type": "InitializeVariable", "inputs": {"variables": [{"name": name, "type": typ, "value": val}]}}
     ALL = ("Succeeded", "Failed", "Skipped", "TimedOut")
+
+    # Safety net: HD9 blocks closing a ticket with no resolution from the Teams card, but a direct
+    # edit to the list item (or anything else that bypasses the card) skips that gate entirely.
+    # Catch it here too: if Status lands on Closed with no Resolution on file, put it back and tell
+    # whoever made the edit, instead of letting a bare close go out to the requester.
+    close_guard = seq([
+        ("Needs_resolution_HD4", compose(f"@and(equals({V},'{S_CLOSED}'),empty(coalesce({t('Resolution')},'')))")),
+        ("Fallback_status", compose(f"@coalesce({t('LastNotifiedStatus')},'{S_OPEN}')")),
+    ])
+    close_guard["Revert_bad_close"] = {**cond("@outputs('Needs_resolution_HD4')", seq([
+        ("Patch_revert_status", sp("PatchItem", {
+            "id": f"@{ID}", "item/Title": f"@{t('Title')}",
+            "item/Status/Value": "@outputs('Fallback_status')"})),
+        ("Set_varStatus_reverted", {"type": "SetVariable", "inputs": {"name": "varStatus", "value": "@outputs('Fallback_status')"}}),
+        ("Tell_editor_resolution_needed", scope_msg("Revert_msg", f"@{{coalesce({t('Editor/Email')},'{ME}')}}",
+            f"<p>IT-@{{{ID}}} was set to Closed without a resolution, so it was put back to <b>@{{outputs('Fallback_status')}}</b>. "
+            f"Add a resolution and set it to Closed again — use the ticket's <b>Update status</b> card in Teams, or fill in the Resolution field before closing.</p><p>{lnk}</p>")),
+    ])), "runAfter": ra("Fallback_status")}
+
     actions = seq([
         ("Init_varStatus", var("varStatus", "string", f"@{t('Status/Value')}")),
         ("Init_varConversation", var("varConversation", "string", f"@coalesce({t('Conversation')},'')")),
@@ -652,6 +671,7 @@ def hd4():
         ("Tech", compose(f"@toLower(coalesce({t('AssignedTo/Email')},''))")),
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
+        ("Close_guard", {"type": "Scope", "runAfter": {}, "actions": close_guard}),
         ("Part_B_tech_assigned", cond(f"@and(not(empty(outputs('Tech'))),not(equals(outputs('Tech'),toLower(coalesce({t('LastNotifiedTech')},'')))))", partB)),
         ("Part_A_note_for_user", {**cond(f"@not(empty(coalesce({t('NoteToUser')},'')))", partA),
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
