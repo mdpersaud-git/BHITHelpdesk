@@ -43,8 +43,8 @@ Status changes automatically notify the requester (email + Teams) and move the P
 
 ## Clock, reports and reminders
 
-- **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets.
-- **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours). Review it each morning.
+- **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours Martin and Joseph (first-line) both get a direct Teams ping. Once it's assigned — to either tech or Martin — the normal per-day open reminder takes over and goes to whoever it's assigned to.
+- **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours), emailed to Martin.
 - **HD7:** a requester can ask for "My open tickets" and gets a list.
 
 ## Reply to a closed ticket

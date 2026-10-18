@@ -6,6 +6,9 @@ TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
 MBX = "IT_Support@branthaven.com"
 ME = "mpersaud@branthaven.com"
+TECH1 = "tsiddiqui@branthaven.com"   # Talal Siddiqui
+TECH2 = "jelkadi@branthaven.com"     # Joseph El-Kadi, first-line support
+UNASSIGNED_PING_TEAM = [ME, TECH2]   # 5-hour unassigned-ticket ping: Martin + first-line support only
 GROUP = "f6e29c64-7081-428a-9713-f9f4b3373f67"
 CHANNEL = "19:a5b109f2452d44a9a1a80e1d72075232@thread.tacv2"
 PLAN = "AP29gK5xm06UPxOU3IjkQWUAFqRt"
@@ -124,6 +127,9 @@ SUPPORT = "IT_Support@branthaven.com"
 
 def scope_msg(prefix, to, html):
     return {"type": "Scope", "runAfter": {}, "actions": support_msg(prefix, to, html)}
+def team_msgs(prefix, html, team):
+    """1:1-message each person in `team` in parallel. Returns {name: action} for a branch."""
+    return {f"{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
 def support_msg(prefix, to, html):
     """Message a requester 1:1 from the IT Support account (connection shared_teams_1).
     Returns {name: action} for a branch, or use .items() in a seq list."""
@@ -748,8 +754,8 @@ def hd6():
         ("Update_H", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/BusinessHoursOpen": "@outputs('H')", "item/SLAHours": "@outputs('S')"})),
         ("Unassigned_at_4_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),4))", {
             "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
-        ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))", {
-            "Tell_me_unassigned_5h": scope_msg("Unassigned5h_msg", ME, f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
+        ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))",
+            team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM))),
         ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))", {
             "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                 f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
