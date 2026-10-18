@@ -7,7 +7,7 @@ Business day for SLA purposes: **7am–9pm**, every day.
 
 | Source | What happens |
 |---|---|
-| Email to the help desk mailbox | HD1 creates a ticket. A reply containing an [IT-123] tag updates that ticket. |
+| Email to the help desk mailbox | HD1 creates a ticket. A reply containing an [IT-123] tag updates that ticket. Branthaven senders always get a ticket; outside senders only if their address or domain is on the **External Senders** list (see below). Everything else lands in the mailbox's **Review** folder and is ignored. |
 | IT Support form (Microsoft Forms) | HD2 creates a ticket. |
 | **Report an IT issue** Teams app | HD14 creates a ticket (source: "Teams form"). |
 
@@ -25,6 +25,17 @@ Every new ticket then runs HD3: it sets permissions (the requester sees only the
 ## Logging a ticket for someone else
 
 In the **Report an IT issue** app, fill in **On behalf of** with the person's Branthaven email address (e.g. jane@branthaven.com). The ticket then belongs to that person: they get the confirmation and every update, and the ticket shows *Logged by <you>*. It is **not** assigned to you. It lands unassigned like any other ticket, so the team can pick it up. Leave the box empty to log a ticket for yourself. Only @branthaven.com addresses are accepted.
+
+## External senders (vendors, trades, consultants)
+
+Outside addresses can raise and work tickets **by email only**. Add them to the **External Senders** list on the help desk site: one row per entry, **Title** = either a whole domain (`acmeplumbing.ca`) or one address (`bob.smith@gmail.com`); case doesn't matter. Remove the row to cut them off. Changes take effect on the next email — no flow change needed.
+
+What's different for an external ticket:
+
+- The Conversation log starts with "Ticket created from Email (external sender)". The Requester person field is empty; **Requester Email** holds their address.
+- They get the same confirmation, status and reminder **emails**, without the View-ticket / portal links — they have no access to the site. They never get Teams messages.
+- They reply by email (keeping IT-<n> in the subject) and that's posted to the ticket exactly like an internal reply. Techs work the ticket the same way.
+- Anything from an address that isn't on the list stays in the **Review** folder. Glance at it now and then; a legitimate request from an unknown vendor means "add them to the list and forward the email to the mailbox", not a manual ticket.
 
 ## Status guide
 
@@ -63,7 +74,7 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 | Symptom | Check |
 |---|---|
 | No confirmation sent | HD3 run history (Power Automate), requester email field on the ticket |
-| Ticket not created from email | HD1 run history; was it sent to the right mailbox? |
+| Ticket not created from email | HD1 run history; was it sent to the right mailbox? Outside sender: is their domain/address on the External Senders list? Check the Review folder. |
 | App says error on Send | HD14 run history; the Category chosen must match a SharePoint Category choice |
 | Reminder/close didn't fire | HD6 run history (runs 7am–9pm) |
 

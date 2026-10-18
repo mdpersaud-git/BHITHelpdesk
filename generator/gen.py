@@ -4,7 +4,9 @@ OUT = os.path.join(os.path.dirname(__file__), 'out')
 SITE = "https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2"
 TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
+EXTERNAL_SENDERS = "EXTERNAL-SENDERS-LIST-GUID"   # "External Senders" allow-list: Title = domain or full address
 MBX = "IT_Support@branthaven.com"
+INTERNAL_DOMAIN = "@branthaven.com"
 ME = "mpersaud@branthaven.com"
 TECH1 = "tsiddiqui@branthaven.com"   # Talal Siddiqui
 TECH2 = "jelkadi@branthaven.com"     # Joseph El-Kadi, first-line support
@@ -242,6 +244,18 @@ def link(idexpr):
 def req_link(idexpr):
     return f"<a href=\"{REQ_URL}@{{{idexpr}}}\">View ticket</a>"
 
+def is_internal(email_expr):
+    """expression (no leading @): true when the address belongs to a Branthaven user"""
+    return f"endsWith({email_expr},'{INTERNAL_DOMAIN}')"
+
+def req_link_if_internal(idexpr, email_expr):
+    """View-ticket paragraph for internal requesters only; external senders have no SharePoint access"""
+    return f"@{{if({is_internal(email_expr)},concat('<p><a href=\"{REQ_URL}',{idexpr},'\">View ticket</a></p>'),'')}}"
+
+def if_internal(cond_expr, yes, no=None, after=None):
+    """Wrap a requester-facing Teams step so it only runs for internal requesters. `yes` is {name: action}."""
+    return cond(f"@{cond_expr}", yes, no, after)
+
 def nowET(fmt):
     return f"convertTimeZone(utcNow(),'UTC','{TZ}','{fmt}')"
 
@@ -293,15 +307,17 @@ CONFIRM_BODY = (
     '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
     "<p>Hi @{first(split(trim(coalesce(§T§Requester/DisplayName'],first(split(outputs('ReqEmail'),'@')))),' '))},</p>"
     "<p><b>SUBJECT:</b> @{§T§Title']}<br><b>DESCRIPTION:</b> @{coalesce(§T§Details'],'')}</p>"
-    "@{if(outputs('HasPic'),concat('<p><b>IMAGE:</b> <a href=\"',outputs('PicUrl'),'\">View the image attached to your ticket</a></p>'),'')}"
+    "@{if(and(outputs('HasPic'),outputs('IsInternal')),concat('<p><b>IMAGE:</b> <a href=\"',outputs('PicUrl'),'\">View the image attached to your ticket</a></p>'),'')}"
     "<p>This email was system generated for the purpose of communicating that the referenced Ticket Number has been created to record your contact with the IT Team. "
-    "To keep you informed on the progress of your Ticket, you will receive ongoing automated emails and Teams messages when your IT Ticket Status changes as follows:</p>"
+    "To keep you informed on the progress of your Ticket, you will receive ongoing automated emails@{if(outputs('IsInternal'),' and Teams messages','')} when your IT Ticket Status changes as follows:</p>"
     '<table style="border-collapse:collapse;margin:8px 0 12px 0">'
     f"<tr><th {_TH}>TICKET STATUS</th><th {_TH}>MEANING</th></tr>"
     + "".join(f"<tr><td {_TD}>{a}</td><td {_TD}>{b}</td></tr>" for a, b in _ROWS) +
     "</table>"
-    f'<p>Please feel free to use our <a href="{PORTAL_URL}">Ticket Portal</a> anytime to view the Status of your Ticket. To add comments or attachments, reply to this email or reply in the IT Support chat in Teams.</p>'
-    "<p>You will also receive Teams messages from <b>IT Support</b>. You can reply to IT in that chat or by replying to this email.</p>"
+    "@{if(outputs('IsInternal'),"
+    f"'<p>Please feel free to use our <a href=\"{PORTAL_URL}\">Ticket Portal</a> anytime to view the Status of your Ticket. To add comments or attachments, reply to this email or reply in the IT Support chat in Teams.</p>"
+    "<p>You will also receive Teams messages from <b>IT Support</b>. You can reply to IT in that chat or by replying to this email.</p>',"
+    "'<p>To add comments or attachments, or to reply to IT, reply to this email and keep the ticket number in the subject.</p>')}"
     "<p><b>TICKET NUMBER:</b> IT-@{§ID§}<br>"
     "<b>TICKET STATUS:</b> @{if(empty(coalesce(§T§AssignedTo/Email'],'')),'Open','Assigned')}<br>"
     "<b>TICKET CONTACT:</b> @{coalesce(§T§Requester/DisplayName'],outputs('ReqEmail'))} (@{outputs('ReqEmail')})<br>"
@@ -360,10 +376,11 @@ def hd1():
     new_item = {
         "item/Title": title_expr,
         "item/Details": "@outputs('CleanBody')",
-        "item/Requester/Claims": "@outputs('Sender')",
+        # an external address cannot be resolved to a person; keep RequesterEmail as the only identity for them
+        "item/Requester/Claims": "@if(outputs('IsInternal'),outputs('Sender'),null)",
         "item/RequesterEmail": "@outputs('Sender')",
         "item/Source/Value": "Email",
-        "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Email by ',outputs('Sender'),decodeUriComponent('%0A%0A'))",
+        "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',if(outputs('IsInternal'),'Email','Email (external sender)'),' by ',outputs('Sender'),decodeUriComponent('%0A%0A'))",
         "item/Category/Value": "Uncategorized",
         "item/Priority/Value": f"@if(contains(toLower(coalesce({T},'')),'urgent'),'High','Medium')",
         "item/Status/Value": S_OPEN,
@@ -393,7 +410,7 @@ def hd1():
         ("Has_channel_post", cond(f"@not(empty(coalesce({gi}?['ChannelMessageId'],'')))", {
             "Reply_in_channel": channel_reply(f"@{gi}?['ChannelMessageId']",
                 f"<p>@{{triggerOutputs()?['body/from']}} replied on IT-@{{outputs('TicketId')}}:</p><p>@{{outputs('ReplyText')}}</p>")})),
-        ("Was_resolved", cond(f"@equals({gi}?['Status']?['Value'],'{S_RES}')", {
+        ("Was_resolved", cond(f"@and(equals({gi}?['Status']?['Value'],'{S_RES}'),outputs('IsInternal'))", {
             "Tell_requester_reopened": {"type": "Scope", "runAfter": {}, "actions": support_msg("Post_reopened", "@outputs('Sender')",
                 f"<p><b>IT-@{{outputs('TicketId')}} has been reopened</b></p><p>@{{{gi}?['Title']}}</p>" + support_links("outputs('TicketId')", f"{gi}?['Title']"))}})),
     ])
@@ -416,12 +433,21 @@ def hd1():
         ("Apply_to_each_3", attach_loop("@body('Create_item')?['ID']", None, "_3")),
     ])
     actions = seq([
-        ("Sender", compose("@toLower(triggerOutputs()?['body/from'])")),
+        ("Sender", compose("@toLower(trim(coalesce(triggerOutputs()?['body/from'],'')))")),
+        ("SenderDomain", compose("@last(split(outputs('Sender'),'@'))")),
+        ("IsInternal", compose("@" + is_internal("outputs('Sender')"))),
+        # External senders: allowed only when their address or domain is on the "External Senders" list.
+        # Read the whole (small) list and compare in an expression: no OData quoting, case-insensitive.
+        ("Get_external_senders", sp("GetItems", {"table": EXTERNAL_SENDERS, "$top": 500})),
+        ("Allowed_senders", {"type": "Select", "runAfter": ra("Get_external_senders", status=("Succeeded", "Failed")),
+                             "inputs": {"from": "@coalesce(body('Get_external_senders')?['value'],createArray())",
+                                        "select": "@toLower(trim(coalesce(item()?['Title'],'')))"}}),
+        ("IsAllowedExternal", compose("@or(contains(body('Allowed_senders'),outputs('Sender')),contains(body('Allowed_senders'),outputs('SenderDomain')))")),
         # skip inline images (signature logos); only real attachments go on the ticket
         ("Real_attachments", {"type": "Query", "inputs": {"from": "@coalesce(triggerOutputs()?['body/attachments'],createArray())",
                                                           "where": "@not(equals(item()?['isInline'],true))"}}),
-        ("Is_it_a_real_internal_email", cond(
-            f"@and(endsWith(outputs('Sender'),'@branthaven.com'),not(equals(outputs('Sender'),toLower('{MBX}'))),"
+        ("Is_it_a_real_email_from_a_known_sender", cond(
+            f"@and(or(outputs('IsInternal'),outputs('IsAllowedExternal')),not(equals(outputs('Sender'),toLower('{MBX}'))),"
             f"not(startsWith(coalesce({T},''),'Automatic reply')),not(startsWith(coalesce({T},''),'Undeliverable')))",
             {}, seq([("Move_to_Review", move(F_REVIEW)),
                      ("Terminate", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}})]))),
@@ -484,11 +510,13 @@ def hd3():
     ID = t('ID')
     actions = seq([
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
+        ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
         ("Tag", compose(f"@concat('IT-',{ID})")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
-        ("Has_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
+        # external senders have no SharePoint identity: nothing to grant, they work the ticket by email
+        ("Has_requester", cond("@and(not(empty(outputs('ReqEmail'))),outputs('IsInternal'))", seq([
             ("Ensure_requester", sp_http("POST", "_api/web/ensureuser",
                 body="{\"logonName\":\"i:0#.f|membership|@{outputs('ReqEmail')}\"}")),
             ("Give_requester_read", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
@@ -516,12 +544,14 @@ def hd3():
             ("Send_confirmation_email", mail("@outputs('ReqEmail')",
                 f"[IT-@{{{ID}}}] We've got your request: @{{{t('Title')}}}",
                 CONFIRM_BODY.replace("§ID§", ID).replace("§T§", "triggerOutputs()?['body/"))),
-            ("Confirm_in_Teams", {"type": "Scope", "runAfter": ra("Send_confirmation_email", status=("Succeeded", "Failed")),
-                "actions": support_msg("Send_confirmation_chat", "@outputs('ReqEmail')",
-                    f"<p><b>IT-@{{{ID}}} created:</b> @{{{t('Title')}}}</p>"
-                    f"<p>Status: @{{if(empty(coalesce({t('AssignedTo/Email')},'')),'Open','Assigned')}} · Urgency: @{{{t('Priority/Value')}}}</p>"
-                    "@{if(outputs('HasPic'),concat('<p><a href=\"',outputs('PicUrl'),'\">View image</a></p>'),'')}"
-                    "<p>You'll get a message here and an email each time the status changes.</p>" + support_links(ID, t('Title')))}),
+            ("Confirm_in_Teams_if_internal", {**if_internal("outputs('IsInternal')", {
+                "Confirm_in_Teams": {"type": "Scope", "runAfter": {},
+                    "actions": support_msg("Send_confirmation_chat", "@outputs('ReqEmail')",
+                        f"<p><b>IT-@{{{ID}}} created:</b> @{{{t('Title')}}}</p>"
+                        f"<p>Status: @{{if(empty(coalesce({t('AssignedTo/Email')},'')),'Open','Assigned')}} · Urgency: @{{{t('Priority/Value')}}}</p>"
+                        "@{if(outputs('HasPic'),concat('<p><a href=\"',outputs('PicUrl'),'\">View image</a></p>'),'')}"
+                        "<p>You'll get a message here and an email each time the status changes.</p>" + support_links(ID, t('Title')))}}),
+                "runAfter": ra("Send_confirmation_email", status=("Succeeded", "Failed"))}),
         ]))),
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
         ("Card", compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
@@ -560,7 +590,9 @@ def hd4():
     who = (f"if(equals(toLower(coalesce({t('Editor/Email')},'')),'{MBX.lower()}'),"
            f"coalesce({t('AssignedTo/DisplayName')},'IT'),coalesce({t('Editor/DisplayName')},'IT'))")
     first = "outputs('FirstName')"
-    portal = f'<a href="{PORTAL_URL}">Ticket Portal</a>'
+    # portal mentions only make sense for Branthaven users; external senders work the ticket by email
+    portal_note = f"@{{if(outputs('IsInternal'),' You can also view your ticket in the <a href=\"{PORTAL_URL}\">Ticket Portal</a>.','')}}"
+    portal_line = f"@{{if(outputs('IsInternal'),'<p>You can view your ticket anytime in the <a href=\"{PORTAL_URL}\">Ticket Portal</a>.</p>','')}}"
     details = ("<p><b>TICKET NUMBER:</b> IT-@{" + ID + "}<br>"
                "<b>TICKET STATUS:</b> @{" + V + "}<br>"
                "<b>TICKET ASSIGNEE:</b> @{coalesce(" + t('AssignedTo/DisplayName') + ",'Not yet assigned')}<br>"
@@ -585,7 +617,7 @@ def hd4():
             "runAfter": ra("Has_task_B", status=("Succeeded", "Failed", "Skipped"))}),
         ("First_response", cond("@empty(variables('varFirstResponse'))", {
             "Set_varFirstResponse": {"type": "SetVariable", "inputs": {"name": "varFirstResponse", "value": "@{utcNow()}"}}})),
-        ("Reassigned_same_status", cond(f"@and(not(empty(coalesce({t('LastNotifiedTech')},''))),equals({V},coalesce({t('LastNotifiedStatus')},'')))", {
+        ("Reassigned_same_status", cond(f"@and(not(empty(coalesce({t('LastNotifiedTech')},''))),equals({V},coalesce({t('LastNotifiedStatus')},'')),outputs('IsInternal'))", {
             "Tell_requester_new_tech": {"type": "Scope", "runAfter": {}, "actions": support_msg("Post_new_tech", "@outputs('ReqEmail')",
                 f"<p><b>IT-@{{{ID}}} is now being handled by @{{{t('AssignedTo/DisplayName')}}}</b></p><p>@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}})),
         ("AssignedLine", {**compose(f"@concat('[',{stamp},' | ',{who},'] Assigned to ',{t('AssignedTo/DisplayName')},decodeUriComponent('%0A%0A'),variables('varConversation'))"),
@@ -600,14 +632,16 @@ def hd4():
         ("Send_note_on_its_own", cond(f"@equals({V},coalesce({t('LastNotifiedStatus')},''))", seq([
             ("Email_the_note", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Update on your ticket: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p><p>@{{{who}}} from IT wrote:</p><p>@{{{t('NoteToUser')}}}</p>"
-                f"<p>Reply to this email to answer. You can also view your ticket in the {portal}.</p>" + details + earlier + "</div>")),
-            ("Chat_the_note", {"type": "Scope", "runAfter": ra("Email_the_note", status=("Succeeded", "Failed")),
-                "actions": support_msg("Post_note", "@outputs('ReqEmail')",
-                    f"<p><b>IT-@{{{ID}}}: message from @{{{who}}}</b></p><p>@{{{t('NoteToUser')}}}</p><p style=\"color:#666\">@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}),
+                f"<p>Reply to this email to answer.{portal_note}</p>" + details + earlier + "</div>")),
+            ("Chat_the_note_if_internal", {**if_internal("outputs('IsInternal')", {
+                "Chat_the_note": {"type": "Scope", "runAfter": {},
+                    "actions": support_msg("Post_note", "@outputs('ReqEmail')",
+                        f"<p><b>IT-@{{{ID}}}: message from @{{{who}}}</b></p><p>@{{{t('NoteToUser')}}}</p><p style=\"color:#666\">@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}}),
+                "runAfter": ra("Email_the_note", status=("Succeeded", "Failed"))}),
             ("Note_in_channel", {**cond(f"@not(empty(coalesce({t('ChannelMessageId')},'')))", {
                 "Reply_note_in_channel": channel_reply(f"@{t('ChannelMessageId')}",
                     f"<p>Note to user from @{{{who}}}: @{{{t('NoteToUser')}}}</p>")}),
-                "runAfter": ra("Chat_the_note", status=("Succeeded", "Failed"))}),
+                "runAfter": ra("Chat_the_note_if_internal", status=("Succeeded", "Failed"))}),
         ]))),
     ])
 
@@ -629,14 +663,16 @@ def hd4():
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
                 f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
                 + resolution_html + note_html + extra_html +
-                f"<p>You can view your ticket anytime in the {portal}.</p>" + details + earlier + "</div>")),
-            ("Chat_status", {"type": "Scope", "runAfter": ra("Email_status", status=("Succeeded", "Failed")),
-                "actions": support_msg("Post_status", "@outputs('ReqEmail')",
-                    f"<p><b>IT-@{{{ID}}} is now @{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
-                    f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
-                    + resolution_html +
-                    f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
-                    + support_links(ID, t('Title')))}),
+                portal_line + details + earlier + "</div>")),
+            ("Chat_status_if_internal", {**if_internal("outputs('IsInternal')", {
+                "Chat_status": {"type": "Scope", "runAfter": {},
+                    "actions": support_msg("Post_status", "@outputs('ReqEmail')",
+                        f"<p><b>IT-@{{{ID}}} is now @{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
+                        f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
+                        + resolution_html +
+                        f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
+                        + support_links(ID, t('Title')))}}),
+                "runAfter": ra("Email_status", status=("Succeeded", "Failed"))}),
         ]))),
         ("Question_missing", {**cond(f"@and(contains({arr([S_WAIT, S_SCHED])},{V}),empty(coalesce({t('NoteToUser')},'')))", {
             "Nudge_the_tech": scope_msg("Nudge_msg", f"@{{coalesce({t('Editor/Email')},'{ME}')}}",
@@ -680,6 +716,7 @@ def hd4():
         ("Init_varFirstResponse", var("varFirstResponse", "string", f"@coalesce({t('FirstResponseOn')},'')")),
         ("Tech", compose(f"@toLower(coalesce({t('AssignedTo/Email')},''))")),
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
+        ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
         ("Close_guard", {"type": "Scope", "runAfter": {}, "actions": close_guard}),
         ("Part_B_tech_assigned", cond(f"@and(not(empty(outputs('Tech'))),not(equals(outputs('Tech'),toLower(coalesce({t('LastNotifiedTech')},'')))))", partB)),
@@ -747,8 +784,9 @@ def hd6():
     it = lambda k: f"items('Apply_to_each')?['{k}']"
     ID = it('ID')
     lnk = link(ID)
-    rlnk = req_link(ID)
     req = f"toLower(coalesce({it('RequesterEmail')},''))"
+    rlnk = req_link_if_internal(ID, req)       # already a <p>…</p>, empty for external senders
+    internal = is_internal(req)
     biz = "outputs('BizDay')"
     new_case = seq([
         ("H", compose(f"@add(int(coalesce({it('BusinessHoursOpen')},0)),1)")),
@@ -776,11 +814,13 @@ def hd6():
                     ("Email_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: IT is waiting for your reply",
                         f"<p>{MARKER}</p><p>IT is waiting for your reply on IT-@{{{ID}}}: @{{{it('Title')}}}</p>"
                         f"<pre>@{{substring(coalesce({it('Conversation')},''),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
-                        f"<p>Reply to this email to answer. The ticket closes after 5 days without a reply.</p><p>{rlnk}</p>")),
-                    ("Chat_reminder", {"type": "Scope", "runAfter": ra("Email_reminder", status=("Succeeded", "Failed")),
-                        "actions": support_msg("Post_reminder", f"@{req}",
-                            f"<p><b>Reminder: IT is waiting for your reply on IT-@{{{ID}}}</b></p><p>@{{{it('Title')}}}</p>"
-                            "<p>The ticket closes after 5 days without a reply.</p>" + support_links(ID, it('Title')))}),
+                        f"<p>Reply to this email to answer. The ticket closes after 5 days without a reply.</p>{rlnk}")),
+                    ("Chat_reminder_if_internal", {**if_internal(internal, {
+                        "Chat_reminder": {"type": "Scope", "runAfter": {},
+                            "actions": support_msg("Post_reminder", f"@{req}",
+                                f"<p><b>Reminder: IT is waiting for your reply on IT-@{{{ID}}}</b></p><p>@{{{it('Title')}}}</p>"
+                                "<p>The ticket closes after 5 days without a reply.</p>" + support_links(ID, it('Title')))}}),
+                        "runAfter": ra("Email_reminder", status=("Succeeded", "Failed"))}),
                 ]))),
             ]))),
     ])
@@ -793,12 +833,15 @@ def hd6():
                 ("Email_resolved_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: is your issue fixed? @{{{it('Title')}}}",
                     f"<p>{MARKER}</p><p>IT marked ticket IT-@{{{ID}}} as resolved: @{{{it('Title')}}}</p>"
                     f"<p><b>Resolution:</b> @{{coalesce({it('Resolution')},'')}}</p>"
-                    "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email or reply in the IT Support chat in Teams within the next day and your ticket will be reopened. Otherwise it closes automatically 48 hours after it was resolved.</p>"
-                    f"<p>{rlnk}</p>")),
-                ("Chat_resolved_reminder", {"type": "Scope", "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed")),
-                    "actions": support_msg("Post_resolved_reminder", f"@{req}",
-                        f"<p><b>Reminder: is IT-@{{{ID}}} fixed?</b></p><p>@{{{it('Title')}}}</p>"
-                        "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. The ticket closes automatically 48 hours after it was resolved.</p>" + support_links(ID, it('Title')))}),
+                    "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email"
+                    f"@{{if({internal},' or reply in the IT Support chat in Teams','')}} within the next day and your ticket will be reopened. Otherwise it closes automatically 48 hours after it was resolved.</p>"
+                    f"{rlnk}")),
+                ("Chat_resolved_reminder_if_internal", {**if_internal(internal, {
+                    "Chat_resolved_reminder": {"type": "Scope", "runAfter": {},
+                        "actions": support_msg("Post_resolved_reminder", f"@{req}",
+                            f"<p><b>Reminder: is IT-@{{{ID}}} fixed?</b></p><p>@{{{it('Title')}}}</p>"
+                            "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. The ticket closes automatically 48 hours after it was resolved.</p>" + support_links(ID, it('Title')))}}),
+                    "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed"))}),
             ]))})),
     ])
     loop = {"type": "Foreach", "foreach": "@body('Get_items_Tickets')?['value']",
