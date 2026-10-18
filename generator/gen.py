@@ -128,8 +128,10 @@ SUPPORT = "IT_Support@branthaven.com"
 def scope_msg(prefix, to, html):
     return {"type": "Scope", "runAfter": {}, "actions": support_msg(prefix, to, html)}
 def team_msgs(prefix, html, team):
-    """1:1-message each person in `team` in parallel. Returns {name: action} for a branch."""
-    return {f"{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
+    """1:1-message each person in `team` in parallel. Returns {name: action} for a branch.
+    The outer Scope name must differ from the inner message-action name (support_msg names
+    its post action literally `prefix`), or Logic Apps rejects the flow for duplicate names."""
+    return {f"Tell_{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
 def support_msg(prefix, to, html):
     """Message a requester 1:1 from the IT Support account (connection shared_teams_1).
     Returns {name: action} for a branch, or use .items() in a seq list."""
