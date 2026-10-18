@@ -702,12 +702,30 @@ def hd4():
 
 # ---------- HD5 Planner task completed ----------
 def hd5():
+    item = lambda k: f"first(body('Get_items')?['value'])?['{k}']"
+    ID = item('ID')
+    lnk = link(ID)
+    has_res = f"not(empty(coalesce({item('Resolution')},'')))"
+    # Same resolution requirement as HD9/HD4, applied to the Planner path: completing the task
+    # alone used to flip the ticket to Resolved Pending Confirmation with no resolution captured.
+    # Now it only does that when a resolution is already on file; otherwise the task is reopened
+    # (back to In progress) and the tech is told to add one before completing it again.
     actions = seq([
         ("Get_items", sp("GetItems", {"$filter": "PlannerTaskId eq '@{triggerOutputs()?['body/id']}'", "$top": 1})),
-        ("Condition", cond(f"@and(greater(length(body('Get_items')?['value']),0),not(contains({arr([S_RES, S_CLOSED])},first(body('Get_items')?['value'])?['Status']?['Value'])))", {
-            "Update_item": sp("PatchItem", {"id": "@first(body('Get_items')?['value'])?['ID']",
-                                            "item/Title": "@first(body('Get_items')?['value'])?['Title']",
-                                            "item/Status/Value": S_RES})})),
+        ("Condition", cond(f"@and(greater(length(body('Get_items')?['value']),0),not(contains({arr([S_RES, S_CLOSED])},{item('Status')}?['Value'])))", {
+            "Has_resolution_HD5": cond(f"@{has_res}", {
+                "Update_item": sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{item('Title')}",
+                                                "item/Status/Value": S_RES})},
+                seq([
+                    ("Reopen_task", op("shared_planner", "UpdateTask_V3", {
+                        "id": "@triggerOutputs()?['body/id']", "body/percentComplete": 50})),
+                    ("Tell_tech_need_resolution_HD5", scope_msg("Need_res_msg_HD5",
+                        f"@coalesce({item('AssignedTo')}?['Email'],'{ME}')",
+                        f"<p>IT-@{{{ID}}} wasn't resolved — completing the Planner task needs a resolution first. "
+                        f"Use the ticket's <b>Update status</b> card in Teams (choose Resolved Pending Confirmation or Closed "
+                        f"and enter the resolution), or fill in the Resolution field directly, then complete the task again.</p><p>{lnk}</p>")),
+                ])),
+        })),
     ])
     trig = {"When_a_task_is_completed": {"recurrence": {"frequency": "Minute", "interval": 1},
         "splitOn": "@triggerOutputs()?['body/value']", "type": "OpenApiConnection",
