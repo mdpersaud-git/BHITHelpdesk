@@ -4,7 +4,7 @@ OUT = os.path.join(os.path.dirname(__file__), 'out')
 SITE = "https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2"
 TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
-EXTERNAL_SENDERS = "EXTERNAL-SENDERS-LIST-GUID"   # "External Senders" allow-list: Title = domain or full address
+EXTERNAL_SENDERS = "37b12028-370c-4b21-b31c-11362129c7fe"   # "External Senders" allow-list: Title = domain or full address
 MBX = "IT_Support@branthaven.com"
 INTERNAL_DOMAIN = "@branthaven.com"
 ME = "mpersaud@branthaven.com"
