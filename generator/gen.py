@@ -12,6 +12,10 @@ TECH1 = "tsiddiqui@branthaven.com"   # Talal Siddiqui
 TECH2 = "jelkadi@branthaven.com"     # Joseph El-Kadi, first-line support
 UNASSIGNED_PING_TEAM = [ME, TECH2]   # 5-hour unassigned-ticket ping: Martin + first-line support only
 NEW_TICKET_PING_TEAM = [ME, TECH2]   # 1:1 Teams message the moment a ticket is created (HD3)
+TECHS = [(ME, "Martin Persaud"), (TECH1, "Talal Siddiqui"), (TECH2, "Joseph El-Kadi")]   # "Edit ticket" card choices
+PRIORITIES = ["High", "Medium", "Low"]
+CATEGORIES = ["Access Request", "Application", "Email", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)",
+              "Mouse / Keyboard / Monitor", "New User Setup", "Other", "Password or Sign-In", "Printer", "Teams", "Uncategorized"]
 GROUP = "f6e29c64-7081-428a-9713-f9f4b3373f67"
 CHANNEL = "19:a5b109f2452d44a9a1a80e1d72075232@thread.tacv2"
 PLAN = "AP29gK5xm06UPxOU3IjkQWUAFqRt"
@@ -240,6 +244,19 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
         {"type": "TextBlock", "text": "Message (sent to the user for Waiting for End User and To Be Scheduled; "
                                       "the resolution for Resolved; an internal note for Escalated)", "wrap": True, "size": "Small", "isSubtle": True},
         {"type": "Input.Text", "id": "status_text", "isMultiline": True, "placeholder": "Optional message"}]
+    keep = {"title": "(keep current)", "value": ""}
+    edit_inputs = [
+        {"type": "TextBlock", "text": "Assign to", "weight": "Bolder"},
+        {"type": "Input.ChoiceSet", "id": "edit_tech", "style": "compact", "value": "",
+         "choices": [keep, {"title": "Unassigned", "value": "none"}] + [{"title": n, "value": e} for e, n in TECHS]},
+        {"type": "TextBlock", "text": "Priority", "weight": "Bolder"},
+        {"type": "Input.ChoiceSet", "id": "edit_priority", "style": "compact", "value": "",
+         "choices": [keep] + [{"title": p, "value": p} for p in PRIORITIES]},
+        {"type": "TextBlock", "text": "Category", "weight": "Bolder"},
+        {"type": "Input.ChoiceSet", "id": "edit_category", "style": "compact", "value": "",
+         "choices": [keep] + [{"title": c, "value": c} for c in CATEGORIES]},
+        {"type": "TextBlock", "text": "Only the fields you change are updated. Reassigning notifies the new technician and the requester.",
+         "wrap": True, "size": "Small", "isSubtle": True}]
     return {"type": "AdaptiveCard", "version": "1.2",
         "body": [
             {"type": "TextBlock", "text": "IT Support [Branthaven] - New Ticket", "weight": "Bolder", "size": "Small", "color": "Accent", "wrap": True},
@@ -258,6 +275,7 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
             {"type": "Action.ShowCard", "title": "Update status", "card": text_card(status_inputs, "status")},
             {"type": "Action.ShowCard", "title": "Note to user", "card": text_card(
                 [{"type": "Input.Text", "id": "note_text", "isMultiline": True, "placeholder": "Message the user sees by email and Teams"}], "note")},
+            {"type": "Action.ShowCard", "title": "Edit ticket", "card": text_card(edit_inputs, "edit")},
             {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{LIST_URL}@{{{ID}}}"},
             *([{"type": "Action.OpenUrl", "title": "View image", "url": "@{outputs('PicUrl')}", "isVisible": pic}] if pic else [])]}
 
@@ -1147,6 +1165,27 @@ def hd9():
             "Case_note": {"case": "note", "actions": {"Note": sp("PatchItem", {
                 "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
                 "item/NoteToUser": "@outputs('Text')"})}},
+            "Case_edit": {"case": "edit", "actions": seq([
+                ("NewTech", compose(f"@toLower(trim(coalesce({data}?['edit_tech'],'')))")),
+                ("NewPriority", compose(f"@trim(coalesce({data}?['edit_priority'],''))")),
+                ("NewCategory", compose(f"@trim(coalesce({data}?['edit_category'],''))")),
+                ("OldTech", compose("@toLower(coalesce(body('Get_item')?['AssignedTo']?['Email'],''))")),
+                ("Edit", sp("PatchItem", {
+                    "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
+                    "item/AssignedTo/Claims": "@if(equals(outputs('NewTech'),''),if(empty(outputs('OldTech')),null,outputs('OldTech')),if(equals(outputs('NewTech'),'none'),null,outputs('NewTech')))",
+                    "item/Priority/Value": "@if(empty(outputs('NewPriority')),body('Get_item')?['Priority']?['Value'],outputs('NewPriority'))",
+                    "item/Category/Value": "@if(empty(outputs('NewCategory')),body('Get_item')?['Category']?['Value'],outputs('NewCategory'))"})),
+                ("Changes", compose(
+                    "@trim(concat("
+                    "if(or(equals(outputs('NewTech'),''),equals(outputs('NewTech'),outputs('OldTech'))),'',"
+                    "concat('Assigned to <b>',if(equals(outputs('NewTech'),'none'),'Unassigned',outputs('NewTech')),'</b> · ')),"
+                    "if(or(empty(outputs('NewPriority')),equals(outputs('NewPriority'),body('Get_item')?['Priority']?['Value'])),'',concat('Priority <b>',outputs('NewPriority'),'</b> · ')),"
+                    "if(or(empty(outputs('NewCategory')),equals(outputs('NewCategory'),body('Get_item')?['Category']?['Value'])),'',concat('Category <b>',outputs('NewCategory'),'</b> · '))))")),
+                ("Note_changes", cond("@and(not(empty(outputs('Changes'))),not(empty(coalesce(body('Get_item')?['ChannelMessageId'],''))))", {
+                    "Post_changes": channel_reply("@body('Get_item')?['ChannelMessageId']",
+                        "<p>IT-@{outputs('TicketId')} updated by @{coalesce(body('Get_clicker_profile')?['displayName'],outputs('Responder'))}: "
+                        "@{substring(outputs('Changes'),0,sub(length(outputs('Changes')),1))}</p>")})),
+            ])},
             "Case_status": {"case": "status", "actions": seq([
                 ("NewResolution", compose(f"@if(and(contains({arr([S_RES, S_CLOSED])},outputs('StatusChoice')),not(empty(outputs('Text')))),outputs('Text'),coalesce(body('Get_item')?['Resolution'],''))")),
                 ("Needs_resolution", compose(f"@and(equals(outputs('StatusChoice'),'{S_CLOSED}'),empty(outputs('NewResolution')))")),
@@ -1422,8 +1461,7 @@ DASH_HEALTH = 14   # "Health" row on the Live overview list, rendered by the "Ch
 def hd15():
     ST7 = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC, S_WAIT, S_SCHED, S_RES]
     PR3 = ["High", "Medium", "Low"]
-    CAT13 = ["Access Request", "Application", "Email", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)",
-             "Mouse / Keyboard / Monitor", "New User Setup", "Other", "Password or Sign-In", "Printer", "Teams", "Uncategorized"]
+    CAT13 = CATEGORIES
     conc1 = {"runtimeConfiguration": {"concurrency": {"repetitions": 1}}}
     def chart(p, src, field, names, item_id, sub_total=None):
         key = f"item()?['{field}']?['Value']"
