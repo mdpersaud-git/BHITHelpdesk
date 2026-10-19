@@ -232,9 +232,11 @@ def channel_card_update(msgid, card_expr, after=None):
                "body/recipient/channelId": CHANNEL, "body/messageBody": card_expr}, after)
 
 CARD_TYPE = "ITHelpDeskTicketCard"
+BLANK_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
-def action_card(ID, title, req, cat, pri, src, details, pic=None):
-    """Static ticket card with action buttons (Adaptive Card 1.2 for Teams mobile). Args are expressions without a leading @."""
+def action_card(ID, title, req, cat, pri, src, details, pic=None, photo=None, req_name=None):
+    """Static ticket card with action buttons (Adaptive Card 1.2 for Teams mobile). Args are expressions without a leading @.
+    photo: expression giving a data: URI of the requester's photo ('' when none); req_name: display name expression."""
     tid = f"@{{{ID}}}"
     def text_card(inputs, act):
         return {"type": "AdaptiveCard", "body": inputs,
@@ -263,8 +265,14 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
         "body": [
             {"type": "TextBlock", "text": "IT Support [Branthaven] - New Ticket", "weight": "Bolder", "size": "Small", "color": "Accent", "wrap": True},
             {"type": "TextBlock", "text": f"IT-@{{{ID}}}: @{{{title}}}", "weight": "Bolder", "size": "Medium", "wrap": True},
+            *([{"type": "ColumnSet", "spacing": "Small", "isVisible": f"@not(empty({photo}))", "columns": [
+                {"type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [
+                    {"type": "Image", "url": f"@if(empty({photo}),'{BLANK_GIF}',{photo})", "size": "Small", "style": "Person"}]},
+                {"type": "Column", "width": "stretch", "verticalContentAlignment": "Center", "items": [
+                    {"type": "TextBlock", "text": f"@{{{req_name}}}", "weight": "Bolder", "wrap": True},
+                    {"type": "TextBlock", "text": f"@{{{req}}}", "size": "Small", "isSubtle": True, "wrap": True, "spacing": "None"}]}]}] if photo else []),
             {"type": "FactSet", "facts": [
-                {"title": "Requester", "value": f"@{{{req}}}"},
+                *([] if photo else [{"title": "Requester", "value": f"@{{{req}}}"}]),
                 {"title": "Category", "value": f"@{{{cat}}}"},
                 {"title": "Priority", "value": f"@{{{pri}}}"},
                 {"title": "Source", "value": f"@{{{src}}}"}]},
@@ -278,6 +286,9 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None):
             {"type": "Action.ShowCard", "title": "Note to user", "card": text_card(
                 [{"type": "Input.Text", "id": "note_text", "isMultiline": True, "placeholder": "Message the user sees by email and Teams"}], "note")},
             {"type": "Action.ShowCard", "title": "Edit ticket", "card": text_card(edit_inputs, "edit")},
+            {"type": "Action.ShowCard", "title": "Quick close", "card": text_card(
+                [{"type": "TextBlock", "text": "Fixed already? Enter the resolution. The ticket is assigned to you and closed in one step; the requester gets a single message.", "wrap": True, "size": "Small", "isSubtle": True},
+                 {"type": "Input.Text", "id": "quick_text", "isMultiline": True, "placeholder": "Resolution (required)"}], "quickclose")},
             {"type": "Action.OpenUrl", "title": "View ticket", "url": f"{LIST_URL}@{{{ID}}}"},
             *([{"type": "Action.OpenUrl", "title": "View image", "url": "@{outputs('PicUrl')}", "isVisible": pic}] if pic else [])]}
 
@@ -627,8 +638,19 @@ def hd3():
                 "runAfter": ra("Send_confirmation_email", status=("Succeeded", "Failed"))}),
         ]))),
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
-        ("Card", compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
-            f"substring(coalesce({t('Details')},''),0,min(length(coalesce({t('Details')},'')),400))", pic="@outputs('HasPic')"))),
+        # requester photo for the card (Branthaven users only): 48x48 from Microsoft 365, embedded as a data URI.
+        # Best effort - no photo, external sender or a Graph refusal just leaves the card without a picture.
+        ("Init_varPhoto", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varPhoto", "type": "string", "value": ""}]}}),
+        ("Requester_photo", cond("@outputs('IsInternal')", seq([
+            ("Get_photo", op("shared_office365users", "HttpRequest", {"Method": "GET",
+                "Uri": "https://graph.microsoft.com/v1.0/users/@{outputs('ReqEmail')}/photos/48x48/$value"})),
+            ("Set_varPhoto", {"type": "SetVariable", "inputs": {"name": "varPhoto",
+                "value": "@concat('data:image/jpeg;base64,',base64(body('Get_photo')))"}}),
+        ]))),
+        ("Card", {**compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
+            f"substring(coalesce({t('Details')},''),0,min(length(coalesce({t('Details')},'')),400))", pic="@outputs('HasPic')",
+            photo="variables('varPhoto')", req_name=f"coalesce({t('Requester/DisplayName')},outputs('ReqEmail'))")),
+            "runAfter": ra("Requester_photo", status=("Succeeded", "Failed", "Skipped", "TimedOut"))}),
         ("Post_to_Help_Desk_channel", channel_card("@{string(outputs('Card'))}", card_type=CARD_TYPE)),
         ("Update_item", sp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{t('Title')}",
@@ -923,7 +945,19 @@ def hd6():
     resolved_case = seq([
         ("ResolvedAge", compose(f"@div(sub(ticks(utcNow()),ticks(coalesce({it('ResolvedOn')},utcNow()))),36000000000)")),
         ("Window_48h", cond("@greaterOrEquals(outputs('ResolvedAge'),48)", {
-            "Close_resolved": sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/Status/Value": S_CLOSED})},
+            # Silent close: LastNotifiedStatus is set with the status so HD4 does not run (the resolved email already
+            # said the ticket would close itself). Planner, the record line and the channel thread are handled here.
+            **seq([
+                ("Close_resolved", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}",
+                    "item/Status/Value": S_CLOSED, "item/LastNotifiedStatus": S_CLOSED, "item/ClosedOn": "@utcNow()",
+                    "item/Conversation": f"@concat('[',{nowET('yyyy-MM-dd HH:mm')},' | System] Status: Closed · closed automatically 48 hours after resolution',decodeUriComponent('%0A%0A'),coalesce({it('Conversation')},''))"})),
+                ("Done_in_Planner", cond(f"@not(empty(coalesce({it('PlannerTaskId')},'')))", {
+                    "Complete_task": planner_update(B_DONE, done=True, task=f"@{it('PlannerTaskId')}")})),
+                ("Note_in_thread", {**cond(f"@not(empty(coalesce({it('ChannelMessageId')},'')))", {
+                    "Post_auto_close": channel_reply(f"@{it('ChannelMessageId')}",
+                        f"<p>IT-@{{{ID}}} is now <b>Closed</b> · closed automatically 48 hours after resolution (no reply from the requester)</p>")}),
+                    "runAfter": ra("Done_in_Planner", status=("Succeeded", "Failed", "Skipped"))}),
+            ])},
             {"Reminder_24h": cond(f"@and(greaterOrEquals(outputs('ResolvedAge'),24),lessOrEquals(int(coalesce({it('ResolvedHours')},0)),0),not(empty({req})))", seq([
                 ("Mark_reminded", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/ResolvedHours": 1})),
                 ("Email_resolved_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: is your issue fixed? @{{{it('Title')}}}",
@@ -1187,6 +1221,17 @@ def hd9():
                     "Post_changes": channel_reply("@body('Get_item')?['ChannelMessageId']",
                         "<p>IT-@{outputs('TicketId')} updated by @{coalesce(body('Get_clicker_profile')?['displayName'],outputs('Responder'))}: "
                         "@{substring(outputs('Changes'),0,sub(length(outputs('Changes')),1))}</p>")})),
+            ])},
+            "Case_quickclose": {"case": "quickclose", "actions": seq([
+                ("QuickText", compose(f"@trim(coalesce({data}?['quick_text'],''))")),
+                ("Quick_close", cond("@empty(outputs('QuickText'))", {
+                    "Say_need_resolution_quick": scope_msg("Need_res_quick_msg", "@outputs('Responder')",
+                        "<p>IT-@{outputs('TicketId')} wasn't closed — Quick close needs the resolution typed in the box.</p>")},
+                    {"Close_now": sp("PatchItem", {
+                        "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
+                        "item/Status/Value": S_CLOSED,
+                        "item/AssignedTo/Claims": "@coalesce(body('Get_item')?['AssignedTo']?['Email'],outputs('Responder'))",
+                        "item/Resolution": "@outputs('QuickText')"})})),
             ])},
             "Case_status": {"case": "status", "actions": seq([
                 ("NewResolution", compose(f"@if(and(contains({arr([S_RES, S_CLOSED])},outputs('StatusChoice')),not(empty(outputs('Text')))),outputs('Text'),coalesce(body('Get_item')?['Resolution'],''))")),
