@@ -1599,7 +1599,7 @@ def hd16():
             "if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours - check HD6 run history.',decodeUriComponent('%0A')),''),"
             "if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_lines'),''),decodeUriComponent('%0A')),''),"
             f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],decodeUriComponent('%0A')),'')))")),
-        ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "System health",
+        ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "IT Ticket Systems Health",
             "item/Total": "@outputs('IssueCount')", "item/Refreshed": f"@{nowET('h:mm tt')}",
             "item/Slot1": "New tickets set up", "item/Share1": "@if(greater(length(body('Incomplete')),0),100,0)",
             "item/Slot6": "@concat(length(body('Recent')?['value']),' created in 24h, ',length(body('Incomplete')),' incomplete')",
