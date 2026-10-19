@@ -135,6 +135,32 @@ def team_msgs(prefix, html, team):
     The outer Scope name must differ from the inner message-action name (support_msg names
     its post action literally `prefix`), or Logic Apps rejects the flow for duplicate names."""
     return {f"Tell_{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
+RUN_LINK = ("https://make.powerautomate.com/environments/@{workflow()?['tags']?['environmentName']}"
+            "/flows/@{workflow()?['name']}/runs/@{workflow()?['run']?['name']}")
+
+def self_check(prefix, scoped, subject, intro, extra=None, after=None):
+    """Monitoring: look at the results of the listed scoped actions (Scope / If / Foreach) and, if any top-level
+    action in them did not succeed, email + Teams-message Martin with the action names, error text and a link to
+    the run. `extra` is an optional expression returning additional {name,status} items (synthetic checks).
+    Returns {name: action}; the first action takes `after`."""
+    src = "union(" + ",".join(f"result('{s}')" for s in scoped) + ")"
+    if extra:
+        src = f"union({src},{extra})"
+    lines = f"@{{join(body('{prefix}_lines'),'')}}"
+    html = (f"<p>{intro}</p><ul>{lines}</ul>"
+            f"<p><a href=\"{RUN_LINK}\">Open this flow run</a></p>")
+    return seq([
+        (f"{prefix}_problems", {"type": "Query", "runAfter": after or {},
+            "inputs": {"from": f"@{src}", "where": "@not(contains(createArray('Succeeded','Skipped'),item()?['status']))"}}),
+        (f"{prefix}_lines", {"type": "Select", "inputs": {"from": f"@body('{prefix}_problems')",
+            "select": "@concat('<li><b>',item()?['name'],'</b>: ',coalesce(item()?['error']?['message'],item()?['status']),'</li>')"}}),
+        (f"{prefix}_alert", cond(f"@greater(length(body('{prefix}_problems')),0)", seq([
+            (f"{prefix}_email", mail(ME, subject, html)),
+            (f"{prefix}_teams", {"type": "Scope", "runAfter": ra(f"{prefix}_email", status=("Succeeded", "Failed")),
+                                 "actions": support_msg(f"{prefix}_dm", ME, html)}),
+        ]))),
+    ])
+
 def support_msg(prefix, to, html):
     """Message a requester 1:1 from the IT Support account (connection shared_teams_1).
     Returns {name: action} for a branch, or use .items() in a seq list."""
@@ -584,6 +610,13 @@ def hd3():
                 f"<p>{link(ID)}</p>")
     actions["Tell_IT_new_ticket"] = {"type": "Scope", "runAfter": ra("Update_item", status=ANY3),
                                      "actions": team_msgs("NewTicket_msg", new_ping, NEW_TICKET_PING_TEAM)}
+    # Monitoring: did the requester confirmation, Planner task, channel post and tech ping all go out?
+    no_channel = ("if(empty(body('Post_to_Help_Desk_channel')?['id']),"
+                  "createArray(json('{\"name\":\"Post_to_Help_Desk_channel\",\"status\":\"Failed\"}')),createArray())")
+    actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
+        f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
+        f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",
+        extra=no_channel, after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
@@ -746,6 +779,12 @@ def hd4():
             "item/ResolvedHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_RES}')),0,{t('ResolvedHours')})"}),
             "runAfter": ra("Part_C_status_changed", status=ALL)}),
     ])
+    # Monitoring: did every requester/tech notification for this update go out?
+    actions.update(self_check("Health", ["Close_guard", "Part_B_tech_assigned", "Part_A_note_for_user", "Part_C_status_changed"],
+        f"[Help desk health] Notification problem on ticket update IT-@{{{ID}}}",
+        f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
+        f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
+        after=ra("Update_item", status=ALL)))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1494,6 +1533,70 @@ def hd15():
             "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 21)], "minutes": list(range(0, 60, 5))}}}}
     return "HD15 Dashboard stats", trig, acts
 
+# ---------- HD16 Daily health check ----------
+def hd16():
+    """Runs every morning after the clock (HD6) has had two runs. Looks at the data the other flows leave behind
+    and emails Martin a short health report; Teams-messages him too when something is wrong.
+      1. tickets created in the last 24h that HD3 did not finish (no Planner task / channel post / created line)
+      2. HD6 heartbeat: open tickets that the hourly clock has not touched in 3 hours
+      3. resolved tickets that should have auto-closed (resolved more than 72h ago)
+      4. emails left in the mailbox's Review folder in the last 24h (not ticketed)
+    Hard flow failures are covered separately by Power Automate's own failure emails to the flow owner."""
+    it = lambda k: f"item()?['{k}']"
+    li = lambda body: f"concat('<li>',{body},'</li>')"
+    working = " or ".join(f"Status eq '{s}'" for s in WORKING)
+    acts = seq([
+        ("Recent", sp("GetItems", {"$filter": "Created ge '@{addHours(utcNow(),-24)}' and Created lt '@{addMinutes(utcNow(),-20)}'", "$top": 500})),
+        ("Incomplete", {"type": "Query", "inputs": {"from": "@body('Recent')?['value']", "where":
+            f"@or(empty(coalesce({it('PlannerTaskId')},'')),empty(coalesce({it('ChannelMessageId')},'')),not(contains(coalesce({it('Conversation')},''),'Ticket created')))"}}),
+        ("Incomplete_lines", {"type": "Select", "inputs": {"from": "@body('Incomplete')", "select": "@" + li(
+            f"'IT-',{it('ID')},' — ',{it('Title')},' (',"
+            f"if(empty(coalesce({it('PlannerTaskId')},'')),'no Planner task; ',''),"
+            f"if(empty(coalesce({it('ChannelMessageId')},'')),'no channel post; ',''),"
+            f"if(not(contains(coalesce({it('Conversation')},''),'Ticket created')),'HD3 did not finish; ',''),')'")}}),
+        ("Working", sp("GetItems", {"$filter": f"({working}) and Created lt '@{{addMinutes(utcNow(),-90)}}'", "$top": 500})),
+        ("Touched", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
+            "where": f"@greater(ticks({it('Modified')}),ticks(addHours(utcNow(),-3)))"}}),
+        ("ClockStalled", compose("@and(greater(length(body('Working')?['value']),0),equals(length(body('Touched')),0))")),
+        ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
+        ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
+            "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
+        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_lines", status=("Succeeded", "Failed", "Skipped")), "actions": seq([
+            ("Find_folder", op("shared_office365", "HttpRequest", {"Method": "GET",
+                "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders?$filter=displayName eq 'Review'&$select=id"})),
+            ("Find_subfolder", op("shared_office365", "HttpRequest", {"Method": "GET",
+                "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox/childFolders?$filter=displayName eq 'Review'&$select=id"})),
+            ("ReviewId", compose("@first(union(coalesce(body('Find_folder')?['value'],createArray()),coalesce(body('Find_subfolder')?['value'],createArray())))?['id']")),
+            ("Review_mail", op("shared_office365", "HttpRequest", {"Method": "GET",
+                "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/@{{outputs('ReviewId')}}/messages?$filter=receivedDateTime ge @{{addHours(utcNow(),-24)}}&$select=subject,from,receivedDateTime&$top=25&$orderby=receivedDateTime desc"})),
+            ("Review_lines", {"type": "Select", "inputs": {"from": "@body('Review_mail')?['value']",
+                "select": "@" + li(f"coalesce({it('from')}?['emailAddress']?['address'],'?'),': ',coalesce({it('subject')},'(no subject)')")}}),
+        ])}),
+        ("ReviewNote", {"type": "Compose", "runAfter": ra("Review_folder", status=("Succeeded", "Failed", "Skipped", "TimedOut")), "inputs":
+            "@if(equals(actions('Review_folder')?['status'],'Succeeded'),"
+            "if(greater(length(body('Review_lines')),0),concat('<ul>',join(body('Review_lines'),''),'</ul>'),'<p>None.</p>'),"
+            "'<p>Could not read the Review folder (check the HD16 run).</p>')"}),
+        ("IssueCount", compose("@add(add(length(body('Incomplete')),length(body('StuckResolved')?['value'])),if(outputs('ClockStalled'),1,0))")),
+        ("Report", compose(
+            "@concat("
+            "'<h3>Help desk health — ',if(equals(outputs('IssueCount'),0),'all clear','PROBLEMS FOUND'),'</h3>',"
+            "'<p><b>New tickets, last 24h:</b> ',length(body('Recent')?['value']),' created; ',length(body('Incomplete')),' with incomplete setup.</p>',"
+            "if(greater(length(body('Incomplete')),0),concat('<ul>',join(body('Incomplete_lines'),''),'</ul>'),''),"
+            "'<p><b>Hourly clock (HD6):</b> ',if(outputs('ClockStalled'),'<span style=\"color:#b00\">NOT RUNNING — no open ticket has been updated in 3 hours</span>',"
+            "concat('OK (',length(body('Working')?['value']),' open tickets being tracked)')),'</p>',"
+            "'<p><b>Auto-close (HD6):</b> ',if(greater(length(body('StuckResolved')?['value']),0),"
+            "concat('<span style=\"color:#b00\">',length(body('StuckResolved')?['value']),' resolved ticket(s) past 72h still not closed</span><ul>',join(body('StuckResolved_lines'),''),'</ul>'),'OK'),'</p>',"
+            "'<p><b>Emails not ticketed (Review folder, last 24h):</b></p>',outputs('ReviewNote'),"
+            "'<p style=\"color:#888;font-size:12px\">Notification failures on individual tickets are reported immediately by HD3/HD4; hard flow failures by Power Automate failure emails to IT Support.</p>')")),
+        ("Email_report", mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear','PROBLEMS: '),if(equals(outputs('IssueCount'),0),'',string(outputs('IssueCount'))))}",
+            "@{outputs('Report')}")),
+        ("Teams_if_problems", cond("@greater(outputs('IssueCount'),0)",
+            {"Tell_Martin": {"type": "Scope", "runAfter": {}, "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")}})),
+    ])
+    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
+            "schedule": {"weekDays": ALLDAYS, "hours": ["9"], "minutes": [30]}}}}
+    return "HD16 Daily health check", trig, acts
+
 # ---------- packaging ----------
 def used_apis(obj, acc):
     if isinstance(obj, str):
@@ -1554,7 +1657,7 @@ def write_package(flows, zip_path, pkg_name):
                 "connectionReferences": {a: {"connectionName": APIS[a][2], "source": "Embedded",
                     "id": f"/providers/Microsoft.PowerApps/apis/shared_{APIS[a][0]}", "tier": "NotSpecified", "apiName": APIS[a][0],
                     "isProcessSimpleApiReferenceConversionAlreadyDone": False} for a in sorted(apis)},
-                "flowFailureAlertSubscribed": False, "isManaged": False}}
+                "flowFailureAlertSubscribed": True, "isManaged": False}}
         fd = os.path.join(tmp, "Microsoft.Flow", "flows", fid)
         os.makedirs(fd)
         json.dump(d, open(os.path.join(fd, "definition.json"), "w"))
@@ -1576,7 +1679,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])

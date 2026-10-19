@@ -58,6 +58,16 @@ Status changes automatically notify the requester (email + Teams) and move the P
 - **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours), emailed to Martin.
 - **HD7:** a requester can ask for "My open tickets" and gets a list.
 
+## Monitoring (is the system healthy?)
+
+Three layers, all reporting to Martin:
+
+1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run: requester email, requester Teams message, Planner task, channel post, tech ping. If any of those did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the step that failed, the error text and a link to the flow run. The ticket itself is still created/updated — only the notification is reported.
+2. **Daily at 9:30 am (HD16).** Emails Martin a health report: new tickets in the last 24 h and any whose setup is incomplete; whether the hourly clock (HD6) is running (an open ticket not touched in 3 hours means it isn't); resolved tickets that should have auto-closed but didn't; and the emails sitting in the mailbox's **Review** folder (not ticketed). Subject starts "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n". When there are problems he also gets it as a Teams message.
+3. **Hard flow failures.** Power Automate emails the flow owner (IT Support) whenever a run fails outright, plus a weekly digest. To receive these as yourself, open each flow → ⋯ → *Flow failure alerts* (or check the IT Support mailbox).
+
+If a health alert names a flow run, open the link: the failed step is highlighted in red with the full error.
+
 ## Reply to a closed ticket
 
 If someone replies — by email or in the Teams chat — to a ticket that's already Closed, the system doesn't reopen it. It starts a **new ticket** instead, tagged "Follow-up to IT-<old number>" in Details, and (via Teams) titled "Follow-up: <old title>" with the same Category/Priority carried over. If the old ticket had a resolution on file, it's copied into the new ticket's Details too ("Previous resolution (IT-<old number>): ..."), so you can see what was already tried without flipping back to the old ticket. The old ticket stays closed as the record of what was done; work the new one like any other.
@@ -80,6 +90,6 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 
 ## Flow reference
 
-HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake.
+HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Daily health check.
 
 *Flows are generated from `generator/gen.py`. Never edit the live flows directly without updating the generator.*
