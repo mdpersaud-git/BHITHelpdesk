@@ -368,6 +368,23 @@ def strip_signature(expr, markers=None):
         out = f"first(split({out},'{m}'))"
     return f"trim({out})"
 
+SAFETY_TIPS = ["Learn why this is important", "Learn why this could be a risk"]
+def strip_banners(expr):
+    """Actions that remove Exchange's injected notices from the top of a message's text: a leading
+    '[CAUTION: External E-Mail ...]' disclaimer and the first-contact safety tip, which ends in a
+    'Learn why ...' link (the URL may follow as '<https://aka.ms/...>'). Done in steps because a single
+    nested expression would exceed the 8 KB expression limit. The result is outputs('BodyText')."""
+    steps = [("Body0", compose(f"@trim({expr})"))]
+    p = "outputs('Body0')"
+    steps.append(("Body1", compose(f"@trim(if(startsWith({p},'[CAUTION'),substring({p},add(indexOf({p},']'),1)),{p}))")))
+    p = "outputs('Body1')"
+    for i, tip in enumerate(SAFETY_TIPS):
+        n = f"Body{i+2}"
+        steps.append((n, compose(f"@if(contains({p},'{tip}'),trim(substring({p},add(indexOf({p},'{tip}'),{len(tip)}))),{p})")))
+        p = f"outputs('{n}')"
+    steps.append(("BodyText", compose(f"@trim(if(startsWith({p},'<http'),substring({p},add(indexOf({p},'>'),1)),{p}))")))
+    return steps
+
 def clean_text(expr):
     """Strip the signature. If that leaves nothing (the message itself starts with 'Thanks' etc.),
     cut only at the hard signature markers, and as a last resort keep the first 2000 characters."""
@@ -453,7 +470,7 @@ def hd1():
     ])
     reply_branch = seq([
         ("TicketId", compose(f"@if(contains(coalesce({T},''),'[IT-'),int(first(split(last(split({T},'[IT-')),']'))),outputs('RefNum'))")),
-        ("ReplyText", compose("@" + clean_text(f"first(split(first(split(body('Html_to_text'),'{MARKER}')),'From: '))"))),
+        ("ReplyText", compose("@" + clean_text(f"first(split(first(split(outputs('BodyText'),'{MARKER}')),'From: '))"))),
         ("Get_item", sp("GetItem", {"id": "@outputs('TicketId')"})),
         ("Update_existing_ticket", cond(
             f"@and(not(empty(string(coalesce({gi}?['ID'],'')))),not(equals({gi}?['Status']?['Value'],'Closed')),"
@@ -485,7 +502,10 @@ def hd1():
             {}, seq([("Move_to_Review", move(F_REVIEW)),
                      ("Terminate", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}})]))),
         ("Html_to_text", op("shared_conversionservice", "HtmlToText", {"Content": "@triggerOutputs()?['body/body']"})),
-        ("CleanBody", compose("@" + clean_text("body('Html_to_text')"))),
+        # drop the banners Exchange injects at the top of outside mail: the external-mail CAUTION notice and the
+        # "first contact" safety tip ("X appears similar to someone... Learn why this could be a risk")
+        *strip_banners("coalesce(body('Html_to_text'),'')"),
+        ("CleanBody", compose("@" + clean_text("outputs('BodyText')"))),
         # safety net: no [IT-n] in the subject, but the subject or body names IT-n (first occurrence; digits only)
         ("RefPart", compose(f"@concat(coalesce(split(toUpper(concat(coalesce({T},''),' ',coalesce(body('Html_to_text'),''))),'IT-')?[1],''),'     ')")),
         ("RefNum", compose("@if(not(contains('0123456789',substring(outputs('RefPart'),0,1))),0,"
