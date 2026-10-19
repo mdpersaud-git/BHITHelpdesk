@@ -138,7 +138,7 @@ def team_msgs(prefix, html, team):
 RUN_LINK = ("https://make.powerautomate.com/environments/@{workflow()?['tags']?['environmentName']}"
             "/flows/@{workflow()?['name']}/runs/@{workflow()?['run']?['name']}")
 
-def self_check(prefix, scoped, subject, intro, extra=None, after=None):
+def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=None):
     """Monitoring: look at the results of the listed scoped actions (Scope / If / Foreach) and, if any top-level
     action in them did not succeed, email + Teams-message Martin with the action names, error text and a link to
     the run. `extra` is an optional expression returning additional {name,status} items (synthetic checks).
@@ -154,10 +154,16 @@ def self_check(prefix, scoped, subject, intro, extra=None, after=None):
             "inputs": {"from": f"@{src}", "where": "@not(contains(createArray('Succeeded','Skipped'),item()?['status']))"}}),
         (f"{prefix}_lines", {"type": "Select", "inputs": {"from": f"@body('{prefix}_problems')",
             "select": "@concat('<li><b>',item()?['name'],'</b>: ',coalesce(item()?['error']?['message'],item()?['status']),'</li>')"}}),
+        (f"{prefix}_names", {"type": "Select", "inputs": {"from": f"@body('{prefix}_problems')", "select": "@item()?['name']"}}),
         (f"{prefix}_alert", cond(f"@greater(length(body('{prefix}_problems')),0)", seq([
             (f"{prefix}_email", mail(ME, subject, html)),
             (f"{prefix}_teams", {"type": "Scope", "runAfter": ra(f"{prefix}_email", status=("Succeeded", "Failed")),
                                  "actions": support_msg(f"{prefix}_dm", ME, html)}),
+            # light up the Notifications card on the IT dashboard (HD16 turns it green again after 24h clean)
+            (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health",
+                "item/Share5": 100, "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
+                "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',join(body('{prefix}_names'),', '),', ',{nowET('MMM d h:mm tt')})"},
+                after=ra(f"{prefix}_teams", status=("Succeeded", "Failed")))),
         ]))),
     ])
 
@@ -616,7 +622,7 @@ def hd3():
     actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
         f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",
-        extra=no_channel, after=ra("Tell_IT_new_ticket", status=ANY3)))
+        f"concat('IT-',{ID},' (created)')", extra=no_channel, after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
@@ -784,7 +790,7 @@ def hd4():
         f"[Help desk health] Notification problem on ticket update IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
-        after=ra("Update_item", status=ALL)))
+        f"concat('IT-',{ID},' (updated)')", after=ra("Update_item", status=ALL)))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1389,6 +1395,7 @@ def hd14():
 
 # ---------- HD15 Dashboard stats (feeds the DashStats list behind the SharePoint dashboard) ----------
 DASH = "24631152-bdde-4654-82a4-d64bb0bb9b3b"
+DASH_HEALTH = 14   # "Health" row on the Live overview list, rendered by the "Chart - Health" view on the IT dashboard
 def hd15():
     ST7 = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC, S_WAIT, S_SCHED, S_RES]
     PR3 = ["High", "Medium", "Low"]
@@ -1533,19 +1540,24 @@ def hd15():
             "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 21)], "minutes": list(range(0, 60, 5))}}}}
     return "HD15 Dashboard stats", trig, acts
 
-# ---------- HD16 Daily health check ----------
+# ---------- HD16 Health check ----------
 def hd16():
-    """Runs every morning after the clock (HD6) has had two runs. Looks at the data the other flows leave behind
-    and emails Martin a short health report; Teams-messages him too when something is wrong.
+    """Runs hourly 7am-9pm. Looks at the data the other flows leave behind, updates the "System health" panel on
+    the IT dashboard every run, emails Martin a report once a day (9:30), and Teams-messages him whenever the
+    number of issues changes (so a new problem pings once, not every hour).
       1. tickets created in the last 24h that HD3 did not finish (no Planner task / channel post / created line)
       2. HD6 heartbeat: open tickets that the hourly clock has not touched in 3 hours
       3. resolved tickets that should have auto-closed (resolved more than 72h ago)
-      4. emails left in the mailbox's Review folder in the last 24h (not ticketed)
+      4. emails left in the mailbox's Review folder in the last 24h (not ticketed) - attention, not a failure
+      5. notification problems reported by HD3/HD4 self-checks in the last 24h (they write to the dashboard row)
     Hard flow failures are covered separately by Power Automate's own failure emails to the flow owner."""
     it = lambda k: f"item()?['{k}']"
     li = lambda body: f"concat('<li>',{body},'</li>')"
     working = " or ".join(f"Status eq '{s}'" for s in WORKING)
+    ANY = ("Succeeded", "Failed", "Skipped", "TimedOut")
+    prev = "body('Previous')"
     acts = seq([
+        ("Previous", sp("GetItem", {"table": DASH, "id": DASH_HEALTH})),
         ("Recent", sp("GetItems", {"$filter": "Created ge '@{addHours(utcNow(),-24)}' and Created lt '@{addMinutes(utcNow(),-20)}'", "$top": 500})),
         ("Incomplete", {"type": "Query", "inputs": {"from": "@body('Recent')?['value']", "where":
             f"@or(empty(coalesce({it('PlannerTaskId')},'')),empty(coalesce({it('ChannelMessageId')},'')),not(contains(coalesce({it('Conversation')},''),'Ticket created')))"}}),
@@ -1561,7 +1573,7 @@ def hd16():
         ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
         ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
             "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
-        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_lines", status=("Succeeded", "Failed", "Skipped")), "actions": seq([
+        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_lines", status=ANY), "actions": seq([
             ("Find_folder", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders?$filter=displayName eq 'Review'&$select=id"})),
             ("Find_subfolder", op("shared_office365", "HttpRequest", {"Method": "GET",
@@ -1572,11 +1584,34 @@ def hd16():
             ("Review_lines", {"type": "Select", "inputs": {"from": "@body('Review_mail')?['value']",
                 "select": "@" + li(f"coalesce({it('from')}?['emailAddress']?['address'],'?'),': ',coalesce({it('subject')},'(no subject)')")}}),
         ])}),
-        ("ReviewNote", {"type": "Compose", "runAfter": ra("Review_folder", status=("Succeeded", "Failed", "Skipped", "TimedOut")), "inputs":
-            "@if(equals(actions('Review_folder')?['status'],'Succeeded'),"
-            "if(greater(length(body('Review_lines')),0),concat('<ul>',join(body('Review_lines'),''),'</ul>'),'<p>None.</p>'),"
-            "'<p>Could not read the Review folder (check the HD16 run).</p>')"}),
-        ("IssueCount", compose("@add(add(length(body('Incomplete')),length(body('StuckResolved')?['value'])),if(outputs('ClockStalled'),1,0))")),
+        ("ReviewOk", {"type": "Compose", "runAfter": ra("Review_folder", status=ANY), "inputs": "@equals(actions('Review_folder')?['status'],'Succeeded')"}),
+        ("ReviewCount", compose("@if(outputs('ReviewOk'),length(body('Review_lines')),-1)")),
+        ("ReviewNote", compose(
+            "@if(outputs('ReviewOk'),"
+            "if(greater(outputs('ReviewCount'),0),concat('<ul>',join(body('Review_lines'),''),'</ul>'),'<p>None.</p>'),"
+            "'<p>Could not read the Review folder (check the HD16 run).</p>')")),
+        # notification problems flagged by HD3/HD4 (they stamp Slot11 with the UTC time): red for 24h, then clear
+        ("NotifyRecent", compose(f"@greater(ticks(if(empty(coalesce({prev}?['Slot11'],'')),'2000-01-01T00:00:00Z',{prev}?['Slot11'])),ticks(addHours(utcNow(),-24)))")),
+        ("IssueCount", compose("@add(add(add(length(body('Incomplete')),length(body('StuckResolved')?['value'])),if(outputs('ClockStalled'),1,0)),if(outputs('NotifyRecent'),1,0))")),
+        ("Details", compose(
+            "@trim(concat("
+            "if(greater(length(body('Incomplete')),0),concat('New tickets with incomplete setup: ',join(body('Incomplete_lines'),''),decodeUriComponent('%0A')),''),"
+            "if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours - check HD6 run history.',decodeUriComponent('%0A')),''),"
+            "if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_lines'),''),decodeUriComponent('%0A')),''),"
+            f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],decodeUriComponent('%0A')),'')))")),
+        ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "System health",
+            "item/Total": "@outputs('IssueCount')", "item/Refreshed": f"@{nowET('h:mm tt')}",
+            "item/Slot1": "New tickets set up", "item/Share1": "@if(greater(length(body('Incomplete')),0),100,0)",
+            "item/Slot6": "@concat(length(body('Recent')?['value']),' created in 24h, ',length(body('Incomplete')),' incomplete')",
+            "item/Slot2": "Hourly clock (HD6)", "item/Share2": "@if(outputs('ClockStalled'),100,0)",
+            "item/Slot7": "@if(outputs('ClockStalled'),'no open ticket updated in 3 h',concat(length(body('Working')?['value']),' open tickets being tracked'))",
+            "item/Slot3": "Auto-close (HD6)", "item/Share3": "@if(greater(length(body('StuckResolved')?['value']),0),100,0)",
+            "item/Slot8": "@if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),'resolved tickets closing on time')",
+            "item/Slot4": "Emails not ticketed", "item/Share4": "@if(outputs('ReviewOk'),if(greater(outputs('ReviewCount'),0),50,0),-1)",
+            "item/Slot9": "@if(outputs('ReviewOk'),concat(outputs('ReviewCount'),' in the Review folder, last 24 h'),'could not read the Review folder')",
+            "item/Slot5": "Notifications (HD3/HD4)", "item/Share5": "@if(outputs('NotifyRecent'),100,0)",
+            "item/Slot10": f"@if(empty(coalesce({prev}?['Slot10'],'')),'no problems reported',{prev}?['Slot10'])",
+            "item/Grad": "@outputs('Details')"})),
         ("Report", compose(
             "@concat("
             "'<h3>Help desk health — ',if(equals(outputs('IssueCount'),0),'all clear','PROBLEMS FOUND'),'</h3>',"
@@ -1586,16 +1621,20 @@ def hd16():
             "concat('OK (',length(body('Working')?['value']),' open tickets being tracked)')),'</p>',"
             "'<p><b>Auto-close (HD6):</b> ',if(greater(length(body('StuckResolved')?['value']),0),"
             "concat('<span style=\"color:#b00\">',length(body('StuckResolved')?['value']),' resolved ticket(s) past 72h still not closed</span><ul>',join(body('StuckResolved_lines'),''),'</ul>'),'OK'),'</p>',"
+            f"'<p><b>Notifications (HD3/HD4):</b> ',if(outputs('NotifyRecent'),concat('<span style=\"color:#b00\">',{prev}?['Slot10'],'</span>'),'no problems reported in the last 24h'),'</p>',"
             "'<p><b>Emails not ticketed (Review folder, last 24h):</b></p>',outputs('ReviewNote'),"
+            f"'<p><a href=\"{SITE}/SitePages/IT-Dashboard.aspx\">Open the IT dashboard</a></p>',"
             "'<p style=\"color:#888;font-size:12px\">Notification failures on individual tickets are reported immediately by HD3/HD4; hard flow failures by Power Automate failure emails to IT Support.</p>')")),
-        ("Email_report", mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear','PROBLEMS: '),if(equals(outputs('IssueCount'),0),'',string(outputs('IssueCount'))))}",
-            "@{outputs('Report')}")),
-        ("Teams_if_problems", cond("@greater(outputs('IssueCount'),0)",
-            {"Tell_Martin": {"type": "Scope", "runAfter": {}, "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")}})),
+        ("Daily_email", cond(f"@equals(int({nowET('HH')}),9)", {
+            "Email_report": mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear',concat('PROBLEMS: ',string(outputs('IssueCount')))))}",
+                                 "@{outputs('Report')}")})),
+        ("Teams_if_changed", {**cond(f"@and(greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
+            {"Tell_Martin": {"type": "Scope", "runAfter": {}, "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")}}),
+            "runAfter": ra("Daily_email", status=ANY)}),
     ])
     trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
-            "schedule": {"weekDays": ALLDAYS, "hours": ["9"], "minutes": [30]}}}}
-    return "HD16 Daily health check", trig, acts
+            "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 22)], "minutes": [30]}}}}
+    return "HD16 Health check", trig, acts
 
 # ---------- packaging ----------
 def used_apis(obj, acc):

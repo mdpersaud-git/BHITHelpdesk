@@ -60,13 +60,23 @@ Status changes automatically notify the requester (email + Teams) and move the P
 
 ## Monitoring (is the system healthy?)
 
-Three layers, all reporting to Martin:
+**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Five cards, each green OK / amber CHECK / red PROBLEM, refreshed every hour 7am–9pm by HD16:
 
-1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run: requester email, requester Teams message, Planner task, channel post, tech ping. If any of those did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the step that failed, the error text and a link to the flow run. The ticket itself is still created/updated — only the notification is reported.
-2. **Daily at 9:30 am (HD16).** Emails Martin a health report: new tickets in the last 24 h and any whose setup is incomplete; whether the hourly clock (HD6) is running (an open ticket not touched in 3 hours means it isn't); resolved tickets that should have auto-closed but didn't; and the emails sitting in the mailbox's **Review** folder (not ticketed). Subject starts "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n". When there are problems he also gets it as a Teams message.
-3. **Hard flow failures.** Power Automate emails the flow owner (IT Support) whenever a run fails outright, plus a weekly digest. To receive these as yourself, open each flow → ⋯ → *Flow failure alerts* (or check the IT Support mailbox).
+| Card | What it checks | Red means |
+|---|---|---|
+| New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
+| Hourly clock (HD6) | At least one open ticket has been touched in the last 3 h | HD6 stopped — SLA clock, reminders and auto-close are all off |
+| Auto-close (HD6) | No ticket resolved more than 72 h ago is still "Resolved Pending Confirmation" | Auto-close isn't firing |
+| Emails not ticketed | Mail in the mailbox's **Review** folder in the last 24 h (amber, not red — it's a "go look" not a failure) | — |
+| Notifications (HD3/HD4) | HD3/HD4 reported a failed requester/tech notification in the last 24 h | A requester or tech did not get a message — the card says which ticket and step |
 
-If a health alert names a flow run, open the link: the failed step is highlighted in red with the full error.
+Behind the panel, three layers of alerts all go to Martin:
+
+1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run: requester email, requester Teams message, Planner task, channel post, tech ping. If any did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the failed step, the error text and a link to the flow run, and the Notifications card turns red for 24 h. The ticket itself is still created/updated — only the notification is reported.
+2. **HD16 health check, hourly.** Updates the panel every run; emails Martin a report once a day at 9:30 am (subject "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n"); Teams-messages him whenever the issue count changes, so a new problem pings once rather than every hour.
+3. **Hard flow failures.** Power Automate emails the flow owner (IT Support) whenever a run fails outright, plus a weekly digest. To receive these as yourself, open each flow → ⋯ → *Flow failure alerts*.
+
+If an alert names a flow run, open the link: the failed step is highlighted in red with the full error.
 
 ## Reply to a closed ticket
 
@@ -90,6 +100,6 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 
 ## Flow reference
 
-HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Daily health check.
+HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Health check.
 
 *Flows are generated from `generator/gen.py`. Never edit the live flows directly without updating the generator.*
