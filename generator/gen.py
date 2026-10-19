@@ -1580,8 +1580,14 @@ def hd16():
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox/childFolders?$filter=displayName eq 'Review'&$select=id"})),
             ("ReviewId", compose("@first(union(coalesce(body('Find_folder')?['value'],createArray()),coalesce(body('Find_subfolder')?['value'],createArray())))?['id']")),
             ("Review_mail", op("shared_office365", "HttpRequest", {"Method": "GET",
-                "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/@{{outputs('ReviewId')}}/messages?$filter=receivedDateTime ge @{{addHours(utcNow(),-24)}}&$select=subject,from,receivedDateTime&$top=25&$orderby=receivedDateTime desc"})),
-            ("Review_lines", {"type": "Select", "inputs": {"from": "@body('Review_mail')?['value']",
+                "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/@{{outputs('ReviewId')}}/messages?$filter=receivedDateTime ge @{{addHours(utcNow(),-24)}}&$select=subject,from,receivedDateTime&$top=50&$orderby=receivedDateTime desc"})),
+            # ignore the help desk's own notifications (IT Support as requester) and Microsoft system digests
+            ("Review_real", {"type": "Query", "inputs": {"from": "@body('Review_mail')?['value']", "where":
+                f"@and(not(equals(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'{MBX.lower()}')),"
+                f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'.messaging.microsoft.com')),"
+                f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'@microsoft.com')),"
+                f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'@powerautomate.com')))"}}),
+            ("Review_lines", {"type": "Select", "inputs": {"from": "@body('Review_real')",
                 "select": "@" + li(f"coalesce({it('from')}?['emailAddress']?['address'],'?'),': ',coalesce({it('subject')},'(no subject)')")}}),
         ])}),
         ("ReviewOk", {"type": "Compose", "runAfter": ra("Review_folder", status=ANY), "inputs": "@equals(actions('Review_folder')?['status'],'Succeeded')"}),
@@ -1622,7 +1628,7 @@ def hd16():
             "'<p><b>Auto-close (HD6):</b> ',if(greater(length(body('StuckResolved')?['value']),0),"
             "concat('<span style=\"color:#b00\">',length(body('StuckResolved')?['value']),' resolved ticket(s) past 72h still not closed</span><ul>',join(body('StuckResolved_lines'),''),'</ul>'),'OK'),'</p>',"
             f"'<p><b>Notifications (HD3/HD4):</b> ',if(outputs('NotifyRecent'),concat('<span style=\"color:#b00\">',{prev}?['Slot10'],'</span>'),'no problems reported in the last 24h'),'</p>',"
-            "'<p><b>Emails not ticketed (Review folder, last 24h):</b></p>',outputs('ReviewNote'),"
+            "'<p><b>Emails not ticketed (Review folder, last 24h, excluding system mail):</b></p>',outputs('ReviewNote'),"
             f"'<p><a href=\"{SITE}/SitePages/IT-Dashboard.aspx\">Open the IT dashboard</a></p>',"
             "'<p style=\"color:#888;font-size:12px\">Notification failures on individual tickets are reported immediately by HD3/HD4; hard flow failures by Power Automate failure emails to IT Support.</p>')")),
         ("Daily_email", cond(f"@equals(int({nowET('HH')}),9)", {

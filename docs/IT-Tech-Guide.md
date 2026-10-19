@@ -67,7 +67,7 @@ Status changes automatically notify the requester (email + Teams) and move the P
 | New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
 | Hourly clock (HD6) | At least one open ticket has been touched in the last 3 h | HD6 stopped — SLA clock, reminders and auto-close are all off |
 | Auto-close (HD6) | No ticket resolved more than 72 h ago is still "Resolved Pending Confirmation" | Auto-close isn't firing |
-| Emails not ticketed | Mail in the mailbox's **Review** folder in the last 24 h (amber, not red — it's a "go look" not a failure) | — |
+| Emails not ticketed | Mail in the mailbox's **Review** folder in the last 24 h, ignoring the help desk's own notifications and Microsoft system mail (amber, not red — it's a "go look" not a failure) | — |
 | Notifications (HD3/HD4) | HD3/HD4 reported a failed requester/tech notification in the last 24 h | A requester or tech did not get a message — the card says which ticket and step |
 
 Behind the panel, three layers of alerts all go to Martin:
