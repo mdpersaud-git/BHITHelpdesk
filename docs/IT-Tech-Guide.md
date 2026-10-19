@@ -48,7 +48,7 @@ What's different for an external ticket:
 | Waiting for End User | You need info from the requester | Paused |
 | To Be Scheduled | Booking a time with the requester | Paused |
 | Resolved Pending Confirmation | Fix delivered, awaiting confirmation | Stopped |
-| Closed | Finished | Stopped |
+| Closed | Finished (requesters see this status as **Resolved** in their emails and Teams messages) | Stopped |
 
 Status changes automatically notify the requester (email + Teams) and move the Planner card.
 

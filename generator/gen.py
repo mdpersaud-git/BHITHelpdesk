@@ -335,7 +335,7 @@ _ROWS = [("Open", "Status on newly created Ticket"),
          ("Waiting for End User", "IT Support has requested further information from you"),
          ("To Be Scheduled", "IT Support has requested to schedule a meeting with you"),
          ("Resolved Pending Confirmation", "IT Support has provided resolution and awaiting confirmation that issue has been resolved"),
-         ("Closed", "Ticket has been resolved and closed")]
+         ("Resolved", "Your issue has been resolved and the ticket is complete")]   # shown to requesters as Resolved; stored as Closed
 CONFIRM_BODY = (
     '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
     "<p>Hi @{first(split(trim(coalesce(§T§Requester/DisplayName'],first(split(outputs('ReqEmail'),'@')))),' '))},</p>"
@@ -660,11 +660,14 @@ def hd4():
     # portal mentions only make sense for Branthaven users; external senders work the ticket by email
     portal_note = f"@{{if(outputs('IsInternal'),' You can also view your ticket in the <a href=\"{PORTAL_URL}\">Ticket Portal</a>.','')}}"
     portal_line = f"@{{if(outputs('IsInternal'),'<p>You can view your ticket anytime in the <a href=\"{PORTAL_URL}\">Ticket Portal</a>.</p>','')}}"
+    # requesters never see the word "Closed": the final status is shown to them as "Resolved"
+    UV = f"if(equals({V},'{S_CLOSED}'),'Resolved',{V})"
     details = ("<p><b>TICKET NUMBER:</b> IT-@{" + ID + "}<br>"
-               "<b>TICKET STATUS:</b> @{" + V + "}<br>"
+               "<b>TICKET STATUS:</b> @{" + UV + "}<br>"
                "<b>TICKET ASSIGNEE:</b> @{coalesce(" + t('AssignedTo/DisplayName') + ",'Not yet assigned')}<br>"
                "<b>TICKET URGENCY:</b> @{" + t('Priority/Value') + "}</p>")
-    _hist = "replace(substring(coalesce(triggerOutputs()?['body/Conversation'],''),0,min(length(coalesce(triggerOutputs()?['body/Conversation'],'')),3000)),decodeUriComponent('%0A%0A'),'<br>')"
+    _hist = ("replace(replace(replace(substring(coalesce(triggerOutputs()?['body/Conversation'],''),0,min(length(coalesce(triggerOutputs()?['body/Conversation'],'')),3000)),"
+             "decodeUriComponent('%0A%0A'),'<br>'),'Status: Closed','Status: Resolved'),'Closed automatically','Resolved automatically')")
     earlier = ("@{if(empty(coalesce(triggerOutputs()?['body/Conversation'],'')),'',concat('<p style=\"margin-top:18px\"><b>Ticket history</b></p>"
                "<div style=\"font-size:13px;color:#555;line-height:1.5\">'," + _hist + ",'</div>'))}")
     style = '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
@@ -726,15 +729,15 @@ def hd4():
         ("StatusLine", compose(f"@concat('[',{stamp},' | ',{who},'] Status: ',{V},if(contains({arr([S_RES, S_CLOSED])},{V}),concat(' · Resolution: ',coalesce({t('Resolution')},'')),''),decodeUriComponent('%0A%0A'),variables('varConversation'))")),
         ("Set_varConversation_status", {"type": "SetVariable", "inputs": {"name": "varConversation", "value": "@outputs('StatusLine')"}}),
         ("Has_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
-            ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{V}}}: @{{{t('Title')}}}",
+            ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{UV}}}: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
-                f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
+                f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{UV}}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
                 + resolution_html + note_html + extra_html +
                 portal_line + details + earlier + "</div>")),
             ("Chat_status_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_status": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_status", "@outputs('ReqEmail')",
-                        f"<p><b>IT-@{{{ID}}} is now @{{if(equals({V},'{S_CLOSED}'),'resolved',{V})}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
+                        f"<p><b>IT-@{{{ID}}} is now @{{{UV}}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
                         f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
                         + resolution_html +
                         f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
@@ -887,12 +890,12 @@ def hd6():
                     ("Email_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: IT is waiting for your reply",
                         f"<p>{MARKER}</p><p>IT is waiting for your reply on IT-@{{{ID}}}: @{{{it('Title')}}}</p>"
                         f"<pre>@{{substring(coalesce({it('Conversation')},''),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
-                        f"<p>Reply to this email to answer. The ticket closes after 5 days without a reply.</p>{rlnk}")),
+                        f"<p>Reply to this email to answer. The ticket will be marked Resolved after 5 days without a reply.</p>{rlnk}")),
                     ("Chat_reminder_if_internal", {**if_internal(internal, {
                         "Chat_reminder": {"type": "Scope", "runAfter": {},
                             "actions": support_msg("Post_reminder", f"@{req}",
                                 f"<p><b>Reminder: IT is waiting for your reply on IT-@{{{ID}}}</b></p><p>@{{{it('Title')}}}</p>"
-                                "<p>The ticket closes after 5 days without a reply.</p>" + support_links(ID, it('Title')))}}),
+                                "<p>The ticket will be marked Resolved after 5 days without a reply.</p>" + support_links(ID, it('Title')))}}),
                         "runAfter": ra("Email_reminder", status=("Succeeded", "Failed"))}),
                 ]))),
             ]))),
@@ -907,13 +910,13 @@ def hd6():
                     f"<p>{MARKER}</p><p>IT marked ticket IT-@{{{ID}}} as resolved: @{{{it('Title')}}}</p>"
                     f"<p><b>Resolution:</b> @{{coalesce({it('Resolution')},'')}}</p>"
                     "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email"
-                    f"@{{if({internal},' or reply in the IT Support chat in Teams','')}} within the next day and your ticket will be reopened. Otherwise it closes automatically 48 hours after it was resolved.</p>"
+                    f"@{{if({internal},' or reply in the IT Support chat in Teams','')}} within the next day and your ticket will be reopened. Otherwise it will be marked Resolved automatically 48 hours after the fix was delivered.</p>"
                     f"{rlnk}")),
                 ("Chat_resolved_reminder_if_internal", {**if_internal(internal, {
                     "Chat_resolved_reminder": {"type": "Scope", "runAfter": {},
                         "actions": support_msg("Post_resolved_reminder", f"@{req}",
                             f"<p><b>Reminder: is IT-@{{{ID}}} fixed?</b></p><p>@{{{it('Title')}}}</p>"
-                            "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. The ticket closes automatically 48 hours after it was resolved.</p>" + support_links(ID, it('Title')))}}),
+                            "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. Otherwise it will be marked Resolved automatically after 48 hours.</p>" + support_links(ID, it('Title')))}}),
                     "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed"))}),
             ]))})),
     ])
@@ -1319,7 +1322,7 @@ def hd12():
             "item/Conversation": f"@concat('[',{stamp},'] Ticket created from Teams message by ',outputs('SenderEmail'),' — follow-up to IT-',string({ck}?['ID']),decodeUriComponent('%0A%0A'))",
             "item/Status/Value": S_OPEN})),
         ("Tell_requester_followup", reply_here("Tell_requester_followup",
-            f"<p>IT-@{{{ck}?['ID']}} is closed, so I started a new ticket for this: <b>IT-@{{body('Create_followup_item')?['ID']}}</b>.</p><p>@{{outputs('ReplyText')}}</p>")),
+            f"<p>IT-@{{{ck}?['ID']}} was already resolved, so I started a new ticket for this: <b>IT-@{{body('Create_followup_item')?['ID']}}</b>.</p><p>@{{outputs('ReplyText')}}</p>")),
     ])
     not_found_or_followup = {"Check_closed_ticket": cond(f"@not(empty({ck}))", closed_followup, not_found)}
     person = seq([
