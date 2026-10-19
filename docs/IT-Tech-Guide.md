@@ -11,7 +11,7 @@ Business day for SLA purposes: **7am–9pm**, every day.
 | IT Support form (Microsoft Forms) | HD2 creates a ticket. |
 | **Report an IT issue** Teams app | HD14 creates a ticket (source: "Teams form"). |
 
-Every new ticket then runs HD3: it sets permissions (the requester sees only their own ticket), creates the **Planner task**, emails and messages the requester a confirmation (as IT Support), and alerts IT in the Help Desk channel.
+Every new ticket then runs HD3: it sets permissions (the requester sees only their own ticket), creates the **Planner task**, emails and messages the requester a confirmation (as IT Support), alerts IT in the Help Desk channel, and sends Martin and Joseph a direct Teams message from IT Support with the ticket number, requester, priority and link.
 
 ## Your daily workflow
 

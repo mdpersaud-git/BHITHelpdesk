@@ -11,6 +11,7 @@ ME = "mpersaud@branthaven.com"
 TECH1 = "tsiddiqui@branthaven.com"   # Talal Siddiqui
 TECH2 = "jelkadi@branthaven.com"     # Joseph El-Kadi, first-line support
 UNASSIGNED_PING_TEAM = [ME, TECH2]   # 5-hour unassigned-ticket ping: Martin + first-line support only
+NEW_TICKET_PING_TEAM = [ME, TECH2]   # 1:1 Teams message the moment a ticket is created (HD3)
 GROUP = "f6e29c64-7081-428a-9713-f9f4b3373f67"
 CHANNEL = "19:a5b109f2452d44a9a1a80e1d72075232@thread.tacv2"
 PLAN = "AP29gK5xm06UPxOU3IjkQWUAFqRt"
@@ -576,6 +577,13 @@ def hd3():
     actions["Planner_task"] = {"type": "Scope", "runAfter": ra("Tell_requester", status=ANY3), "actions": planner}
     actions["CreatedLine"]["runAfter"] = ra("Planner_task", status=ANY3)
     actions["Update_item"]["runAfter"] = ra("Post_to_Help_Desk_channel", status=("Succeeded", "Failed"))
+    # Direct 1:1 Teams message to the on-duty people, after the record is complete; never blocks the ticket.
+    new_ping = (f"<p><b>New ticket IT-@{{{ID}}}</b> — @{{{t('Title')}}}</p>"
+                f"<p>From: @{{outputs('ReqEmail')}} &nbsp;·&nbsp; Priority: @{{coalesce({t('Priority/Value')},'Medium')}}"
+                f" &nbsp;·&nbsp; Category: @{{coalesce({t('Category/Value')},'')}}</p>"
+                f"<p>{link(ID)}</p>")
+    actions["Tell_IT_new_ticket"] = {"type": "Scope", "runAfter": ra("Update_item", status=ANY3),
+                                     "actions": team_msgs("NewTicket_msg", new_ping, NEW_TICKET_PING_TEAM)}
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
