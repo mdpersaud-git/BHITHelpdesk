@@ -1602,7 +1602,7 @@ def hd15():
             ("Resolved_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']", "where":
                 f"@if(empty(item()?['ResolvedOn']),false,greaterOrEquals(ticks(item()?['ResolvedOn']),{d30}))"}}),
             ("Res_ok", {"type": "Query", "inputs": {"from": "@body('Resolved_30')", "where":
-                "@lessOrEquals(float(coalesce(item()?['ResolvedHours'],0)),24)"}}),
+                "@lessOrEquals(float(coalesce(item()?['SLAHours'],0)),24)"}}),   # SLA clock hours (7am-9pm, pauses while waiting on the user)
             ("Update_service", sp("PatchItem", {"table": DASH, **item})),
         ]
     catkey = "if(or(empty(item()?['Category']?['Value']),equals(item()?['Category']?['Value'],'Uncategorised')),'Uncategorized',item()?['Category']?['Value'])"
