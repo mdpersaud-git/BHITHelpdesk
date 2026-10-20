@@ -1705,15 +1705,26 @@ def tech_sla():
         avg = f"outputs('{p}_avg')"
         nresp, nmet, nres, nresmet, ntick = (f"length(body('{p}_responded'))", f"length(body('{p}_met'))",
                                              f"length(body('{p}_resolved'))", f"length(body('{p}_resmet'))", f"length(body('{p}_tickets'))")
-        # Fairness score 0-100: 50% responded-within-4h rate, 30% resolved-within-24h rate (falls back to the response
-        # rate when nothing has been resolved yet), 20% speed (100 at 0 min, 0 at 4 h or slower).
+        # still-open tickets for this tech (any age), and those past a business day on the SLA clock
+        acts += [
+            (f"{p}_open", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
+                "where": f"@and(equals(toLower(coalesce(item()?['AssignedTo']?['Email'],'')),'{email.lower()}'),not(contains({arr([S_RES, S_CLOSED])},item()?['Status']?['Value'])))"}}),
+            (f"{p}_overdue", {"type": "Query", "inputs": {"from": f"@body('{p}_open')",
+                "where": f"@greaterOrEquals(float(coalesce(item()?['SLAHours'],0)),{DAY_H})"}}),
+        ]
+        nopen, nover = f"length(body('{p}_open'))", f"length(body('{p}_overdue'))"
+        # Fairness score 0-100: 45% responded-within-4h rate, 25% resolved-within-24h rate (falls back to the response
+        # rate when nothing has been resolved yet), 15% speed (100 at 0 min, 0 at 4 h or slower), 15% backlog
+        # (100 with no overdue open tickets, -25 per open ticket older than a business day, floor 0).
         resp_pct = f"if(equals({nresp},0),0,div(mul(float({nmet}),100),float({nresp})))"
         res_pct = f"if(equals({nres},0),{resp_pct},div(mul(float({nresmet}),100),float({nres})))"
         speed = f"if(less({avg},0),0,if(greater({avg},240),0,sub(100,div({avg},2.4))))"
-        score = f"add(add(mul(0.5,{resp_pct}),mul(0.3,{res_pct})),mul(0.2,{speed}))"
+        backlog = f"if(greaterOrEquals({nover},4),0,sub(100,mul(25,{nover})))"
+        score = f"add(add(add(mul(0.45,{resp_pct}),mul(0.25,{res_pct})),mul(0.15,{speed})),mul(0.15,{backlog}))"
         rows.append({
             "key": f"@float(if(equals({nresp},0),999999,sub(1000,{score})))",      # sort key (always float: sort() needs one type): best first, no data last
             "score": f"@if(equals({nresp},0),-1,int(formatNumber({score},'0')))",
+            "openText": f"@if(equals({nopen},0),'none',concat(string({nopen}),' open',if(equals({nover},0),'',concat(' (',string({nover}),' overdue)'))))",
             "name": name,
             "tickets": f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))",
             "avgText": (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
@@ -1735,6 +1746,7 @@ def tech_sla():
         item[f"item/Share{3*i+1}"] = f"@{r}?['resp']"
         item[f"item/Share{3*i+2}"] = f"@{r}?['res']"
         item[f"item/Share{3*i+3}"] = f"@{r}?['score']"      # -1 = no data (hides the rank badge)
+        item[f"item/Slot{13+i}"] = f"@{r}?['openText']"     # still-open tickets, e.g. "2 open (1 overdue)"
     acts.append(("Update_tech_sla", sp("PatchItem", {"table": DASH, **item})))
     return acts
 
