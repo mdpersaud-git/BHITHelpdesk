@@ -19,7 +19,7 @@ Build one form screen (scrForm) and one thank-you screen (scrDone).
 - Label `lblSub`: Text "Tell us what's going on. You'll get a confirmation email and an update in Teams.", Color RGBA(255,255,255,0.8), X 130, Y 72
 - Label + Text input `txtWhat`: label "What do you need help with?"; HintText "A short summary"
 - Label + Dropdown `ddCategory`: label "Category"
-  Items: ["Access Request", "Application", "Bookings", "BuilderGo/OnLocation Warranty", "Email", "Horizon", "InFormXL", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)", "Mouse / Keyboard / Monitor", "New User Setup", "NewStar", "Other", "Password or Sign-In", "Printer", "SaleFish", "SaleXpress", "Teams", "VPN"]
+  Items: ["Access Request", "Application", "Bookings", "BuilderGo/OnLocation Warranty", "Email", "Horizon", "InFormXL", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)", "Mouse / Keyboard / Monitor", "New User Setup", "NewStar", "OneDrive / SharePoint", "Other", "Password or Sign-In", "Printer", "SaleFish", "SaleXpress", "Teams", "VPN"]
   Default: keyword auto-select from the summary + details — formula in `ddCategory-Default.fx` (app names first, then generic IT terms; falls back to Other). The user can still change it.
   (Must match the Category choices on the Tickets list exactly. Check the list and add/remove to match, e.g. Access Request, Application.)
 - Label + Radio `rdUrgency`: label "How urgent is it?"

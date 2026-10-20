@@ -16,8 +16,8 @@ TECHS = [(ME, "Martin Persaud"), (TECH1, "Talal Siddiqui"), (TECH2, "Joseph El-K
 PRIORITIES = ["High", "Medium", "Low"]
 CATEGORIES = ["Access Request", "Application", "Bookings", "BuilderGo/OnLocation Warranty", "Email", "Horizon", "InFormXL",
               "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)", "Mouse / Keyboard / Monitor", "New User Setup", "NewStar",
-              "Other", "Password or Sign-In", "Printer", "SaleFish", "SaleXpress", "Teams", "VPN", "Uncategorized"]
-# keep in sync with: the Category choice column, ddCategory.Items in the canvas app, and the Chart - Category view (21 slots)
+              "OneDrive / SharePoint", "Other", "Password or Sign-In", "Printer", "SaleFish", "SaleXpress", "Teams", "VPN", "Uncategorized"]
+# keep in sync with: the Category choice column, ddCategory.Items in the canvas app, and the Chart - Category view (22 slots)
 GROUP = "f6e29c64-7081-428a-9713-f9f4b3373f67"
 CHANNEL = "19:a5b109f2452d44a9a1a80e1d72075232@thread.tacv2"
 PLAN = "AP29gK5xm06UPxOU3IjkQWUAFqRt"

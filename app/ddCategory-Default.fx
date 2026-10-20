@@ -17,6 +17,7 @@ If(
 "teams" in t, "Teams",
 "outlook" in t || "email" in t || "e-mail" in t || "mailbox" in t, "Email",
 "access to" in t || "permission" in t || "shared drive" in t || "shared mailbox" in t || "access request" in t, "Access Request",
-"excel" in t || "ms word" in t || "microsoft word" in t || "powerpoint" in t || "adobe" in t || "acrobat" in t || "install" in t || "software" in t || "sharepoint" in t || "onedrive" in t, "Application",
+"onedrive" in t || "one drive" in t || "sharepoint" in t || "share point" in t || "sync" in t || "shared folder" in t || "document library" in t, "OneDrive / SharePoint",
+"excel" in t || "ms word" in t || "microsoft word" in t || "powerpoint" in t || "adobe" in t || "acrobat" in t || "install" in t || "software" in t, "Application",
 "laptop" in t || "computer" in t || "desktop" in t || "frozen" in t || " pc " in t || "blue screen" in t || "slow" in t, "Laptop / Desktop",
 "Other"))
