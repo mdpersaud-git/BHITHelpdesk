@@ -1718,7 +1718,7 @@ def tech_sla():
             "tickets": f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))",
             "avgText": (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
                         f"concat(string(div(int(formatNumber({avg},'0')),60)),' h ',string(mod(int(formatNumber({avg},'0')),60)),' min')))"),
-            "metText": f"@if(equals({nresp},0),'no responses yet',concat(string({nmet}),' of ',string({nresp})))",
+            "metText": f"@if(equals({nresp},0),'none yet',concat(string({nmet}),' of ',string({nresp})))",
             "resp": f"@if(equals({nresp},0),-1,int(formatNumber(div(mul(float({nmet}),100),float({nresp})),'0')))",
             "res": f"@if(equals({nres},0),-1,int(formatNumber(div(mul(float({nresmet}),100),float({nres})),'0')))",
             "avg": f"@{avg}"})
