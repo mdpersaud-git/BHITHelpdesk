@@ -1705,8 +1705,15 @@ def tech_sla():
         avg = f"outputs('{p}_avg')"
         nresp, nmet, nres, nresmet, ntick = (f"length(body('{p}_responded'))", f"length(body('{p}_met'))",
                                              f"length(body('{p}_resolved'))", f"length(body('{p}_resmet'))", f"length(body('{p}_tickets'))")
+        # Fairness score 0-100: 50% responded-within-4h rate, 30% resolved-within-24h rate (falls back to the response
+        # rate when nothing has been resolved yet), 20% speed (100 at 0 min, 0 at 4 h or slower).
+        resp_pct = f"if(equals({nresp},0),0,div(mul(float({nmet}),100),float({nresp})))"
+        res_pct = f"if(equals({nres},0),{resp_pct},div(mul(float({nresmet}),100),float({nres})))"
+        speed = f"if(less({avg},0),0,if(greater({avg},240),0,sub(100,div({avg},2.4))))"
+        score = f"add(add(mul(0.5,{resp_pct}),mul(0.3,{res_pct})),mul(0.2,{speed}))"
         rows.append({
-            "key": f"@if(less({avg},0),999999,{avg})",      # sort key: no data sinks to the bottom
+            "key": f"@if(equals({nresp},0),999999,sub(1000,{score}))",      # sort key: best score first, no data last
+            "score": f"@if(equals({nresp},0),-1,int(formatNumber({score},'0')))",
             "name": name,
             "tickets": f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))",
             "avgText": (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
@@ -1727,7 +1734,7 @@ def tech_sla():
         item[f"item/Slot{4*i+4}"] = f"@{r}?['metText']"
         item[f"item/Share{3*i+1}"] = f"@{r}?['resp']"
         item[f"item/Share{3*i+2}"] = f"@{r}?['res']"
-        item[f"item/Share{3*i+3}"] = f"@{r}?['avg']"
+        item[f"item/Share{3*i+3}"] = f"@{r}?['score']"      # -1 = no data (hides the rank badge)
     acts.append(("Update_tech_sla", sp("PatchItem", {"table": DASH, **item})))
     return acts
 
