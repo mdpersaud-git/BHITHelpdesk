@@ -323,6 +323,17 @@ def if_internal(cond_expr, yes, no=None, after=None):
 def nowET(fmt):
     return f"convertTimeZone(utcNow(),'UTC','{TZ}','{fmt}')"
 
+SUPPORT_OPEN_H, SUPPORT_CLOSE_H = 7, 21
+def sla_start_ticks(created_expr):
+    """Ticks (UTC) of when the response timer starts for a ticket: its creation time, moved to 7:00 the same day
+    if raised before 7am, or 7:00 the next day if raised at/after 9pm (support hours 7am-9pm Eastern)."""
+    c = created_expr
+    h = f"int(convertTimeZone({c},'UTC','{TZ}','HH'))"
+    start_et = (f"if(less({h},{SUPPORT_OPEN_H}),concat(convertTimeZone({c},'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
+                f"if(greaterOrEquals({h},{SUPPORT_CLOSE_H}),concat(convertTimeZone(addDays({c},1),'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
+                f"convertTimeZone({c},'UTC','{TZ}','yyyy-MM-ddTHH:mm:ss')))")
+    return f"ticks(convertTimeZone({start_et},'{TZ}','UTC'))"
+
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ALLDAYS = ["Sunday"] + WEEKDAYS + ["Saturday"]
 DAY_H = 14   # business day = 7am-9pm = 14 hours
@@ -844,7 +855,12 @@ def hd4():
             "item/NoteToUser": "@null",
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
-            "item/ResolvedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_RES}')),utcNow(),{t('ResolvedOn')})",
+            # per-ticket SLA figures (feed the per-tech averages in the By IT Support view); written once, then kept
+            "item/ResponseMinutes": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,div(max(0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))})),600000000)),{t('ResponseMinutes')})",
+            "item/ResponseMet": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(lessOrEquals(max(0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))})),144000000000),1,0)),{t('ResponseMet')})",
+            "item/ResolvedMet": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),if(lessOrEquals(float(coalesce({t('SLAHours')},0)),24),1,0),{t('ResolvedMet')})",
+            # ResolvedOn is also stamped when a ticket goes straight to Closed (Quick close) so it counts as resolved
+            "item/ResolvedOn": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),utcNow(),{t('ResolvedOn')})",
             "item/ClosedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_CLOSED}')),utcNow(),{t('ClosedOn')})",
             "item/WaitingHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_WAIT}')),0,{t('WaitingHours')})",
             "item/ResolvedHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_RES}')),0,{t('ResolvedHours')})"}),
@@ -1590,12 +1606,7 @@ def hd15():
                 "item/Slot6": "@concat(string(length(body('Responded'))),' tickets answered')"}
         # Response timer starts when support is open: a ticket raised before 7am starts at 7:00 that day, one raised
         # at/after 9pm starts at 7:00 the next day. (Ticks of the effective start, in UTC.)
-        c = "item()?['Created']"
-        h = f"int(convertTimeZone({c},'UTC','{TZ}','HH'))"
-        start_et = (f"if(less({h},7),concat(convertTimeZone({c},'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
-                    f"if(greaterOrEquals({h},21),concat(convertTimeZone(addDays({c},1),'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
-                    f"convertTimeZone({c},'UTC','{TZ}','yyyy-MM-ddTHH:mm:ss')))")
-        start = f"ticks(convertTimeZone({start_et},'{TZ}','UTC'))"
+        start = sla_start_ticks("item()?['Created']")
         fr = "ticks(item()?['FirstResponseOn'])"
         wait = f"max(0,sub({fr},{start}))"
         return [

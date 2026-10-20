@@ -54,6 +54,10 @@ What's different for an external ticket:
 
 Status changes automatically notify the requester (email + Teams) and move the Planner card.
 
+## Per-tech service levels
+
+The **By IT Support (30 days)** view of the Tickets list groups the last 30 days of tickets by technician. Each ticket shows **Response (min)** (from the ticket's effective start — 7am for anything raised outside 7am–9pm — to the first IT action), **Response met** (within 4 h) and **Resolved in 24 h** (24 SLA-clock hours). The totals row under each group gives that tech's averages; the bottom row is the team. HD4 writes the three figures once per ticket; they are never recalculated, so a reassignment does not move the credit.
+
 ## Clock, reports and reminders
 
 - **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours Martin and Joseph (first-line) both get a direct Teams ping. Once it's assigned — to either tech or Martin — the normal per-day open reminder takes over and goes to whoever it's assigned to.
