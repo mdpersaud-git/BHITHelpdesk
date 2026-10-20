@@ -1712,7 +1712,7 @@ def tech_sla():
         speed = f"if(less({avg},0),0,if(greater({avg},240),0,sub(100,div({avg},2.4))))"
         score = f"add(add(mul(0.5,{resp_pct}),mul(0.3,{res_pct})),mul(0.2,{speed}))"
         rows.append({
-            "key": f"@if(equals({nresp},0),999999,sub(1000,{score}))",      # sort key: best score first, no data last
+            "key": f"@float(if(equals({nresp},0),999999,sub(1000,{score})))",      # sort key (always float: sort() needs one type): best first, no data last
             "score": f"@if(equals({nresp},0),-1,int(formatNumber({score},'0')))",
             "name": name,
             "tickets": f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))",
