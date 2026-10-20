@@ -1694,10 +1694,10 @@ def tech_sla():
         acts += [
             (f"{p}_tickets", {"type": "Query", "inputs": {"from": "@body('Created_30')",
                 "where": f"@equals(toLower(coalesce(item()?['AssignedTo']?['Email'],'')),'{email.lower()}')"}}),
-            (f"{p}_responded", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(empty(item()?['ResponseMinutes']))"}}),
+            (f"{p}_responded", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(equals(item()?['ResponseMinutes'],null))"}}),
             (f"{p}_minutes", {"type": "Select", "inputs": {"from": f"@body('{p}_responded')", "select": "@float(item()?['ResponseMinutes'])"}}),
             (f"{p}_met", {"type": "Query", "inputs": {"from": f"@body('{p}_responded')", "where": "@equals(float(coalesce(item()?['ResponseMet'],0)),1)"}}),
-            (f"{p}_resolved", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(empty(item()?['ResolvedMet']))"}}),
+            (f"{p}_resolved", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(equals(item()?['ResolvedMet'],null))"}}),
             (f"{p}_resmet", {"type": "Query", "inputs": {"from": f"@body('{p}_resolved')", "where": "@equals(float(coalesce(item()?['ResolvedMet'],0)),1)"}}),
             # average minutes: sum via xpath over the JSON array (no loop needed)
             (f"{p}_avg", compose(f"@if(equals(length(body('{p}_minutes')),0),-1,div(float(xpath(xml(json(concat('{{\"r\":{{\"i\":',string(body('{p}_minutes')),'}}}}'))),'sum(/r/i)')),float(length(body('{p}_minutes')))))")),
