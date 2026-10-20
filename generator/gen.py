@@ -1685,10 +1685,10 @@ DASH_TECHSLA = 15   # "TechSLA" row on the Live overview list, rendered by the "
 def tech_sla():
     """Per-technician service levels over the last 30 days (tickets in Created_30, by assignee): ticket count, average
     first response (ResponseMinutes), % responded within 4h (ResponseMet) and % resolved within 24h (ResolvedMet).
-    Tech i uses Slot(4i+1..4i+4) and Share(3i+1..3i+3). Unrolled per tech - no loops, no variables."""
+    Rows are written in rank order - fastest average first response first, techs with no data last - so the
+    dashboard shows who is in first place. Row i uses Slot(4i+1..4i+4) and Share(3i+1..3i+3)."""
     acts = []
-    item = {"id": DASH_TECHSLA, "item/Title": "TechSLA", "item/Sub": "Service levels by technician, last 30 days",
-            "item/Refreshed": f"@{nowET('h:mm tt')}"}
+    rows = []
     for i, (email, name) in enumerate(TECHS):
         p = f"T{i}"
         acts += [
@@ -1705,14 +1705,29 @@ def tech_sla():
         avg = f"outputs('{p}_avg')"
         nresp, nmet, nres, nresmet, ntick = (f"length(body('{p}_responded'))", f"length(body('{p}_met'))",
                                              f"length(body('{p}_resolved'))", f"length(body('{p}_resmet'))", f"length(body('{p}_tickets'))")
-        item[f"item/Slot{4*i+1}"] = name
-        item[f"item/Slot{4*i+2}"] = f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))"
-        item[f"item/Slot{4*i+3}"] = (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
-                                     f"concat(string(div(int(formatNumber({avg},'0')),60)),' h ',string(mod(int(formatNumber({avg},'0')),60)),' min')))")
-        item[f"item/Slot{4*i+4}"] = f"@if(equals({nresp},0),'no responses yet',concat(string({nmet}),' of ',string({nresp})))"
-        item[f"item/Share{3*i+1}"] = f"@if(equals({nresp},0),-1,int(formatNumber(div(mul(float({nmet}),100),float({nresp})),'0')))"
-        item[f"item/Share{3*i+2}"] = f"@if(equals({nres},0),-1,int(formatNumber(div(mul(float({nresmet}),100),float({nres})),'0')))"
-        item[f"item/Share{3*i+3}"] = f"@{avg}"
+        rows.append({
+            "key": f"@if(less({avg},0),999999,{avg})",      # sort key: no data sinks to the bottom
+            "name": name,
+            "tickets": f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))",
+            "avgText": (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
+                        f"concat(string(div(int(formatNumber({avg},'0')),60)),' h ',string(mod(int(formatNumber({avg},'0')),60)),' min')))"),
+            "metText": f"@if(equals({nresp},0),'no responses yet',concat(string({nmet}),' of ',string({nresp})))",
+            "resp": f"@if(equals({nresp},0),-1,int(formatNumber(div(mul(float({nmet}),100),float({nresp})),'0')))",
+            "res": f"@if(equals({nres},0),-1,int(formatNumber(div(mul(float({nresmet}),100),float({nres})),'0')))",
+            "avg": f"@{avg}"})
+    acts.append(("Tech_rows", compose(rows)))
+    acts.append(("Tech_ranked", compose("@sort(outputs('Tech_rows'),'key')")))
+    item = {"id": DASH_TECHSLA, "item/Title": "TechSLA", "item/Sub": "Service levels by technician, last 30 days",
+            "item/Refreshed": f"@{nowET('h:mm tt')}"}
+    for i in range(len(TECHS)):
+        r = f"outputs('Tech_ranked')?[{i}]"
+        item[f"item/Slot{4*i+1}"] = f"@{r}?['name']"
+        item[f"item/Slot{4*i+2}"] = f"@{r}?['tickets']"
+        item[f"item/Slot{4*i+3}"] = f"@{r}?['avgText']"
+        item[f"item/Slot{4*i+4}"] = f"@{r}?['metText']"
+        item[f"item/Share{3*i+1}"] = f"@{r}?['resp']"
+        item[f"item/Share{3*i+2}"] = f"@{r}?['res']"
+        item[f"item/Share{3*i+3}"] = f"@{r}?['avg']"
     acts.append(("Update_tech_sla", sp("PatchItem", {"table": DASH, **item})))
     return acts
 
