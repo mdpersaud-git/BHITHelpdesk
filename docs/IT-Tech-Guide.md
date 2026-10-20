@@ -56,7 +56,7 @@ Status changes automatically notify the requester (email + Teams) and move the P
 
 ## Per-tech service levels
 
-The **By IT Support (30 days)** view of the Tickets list groups the last 30 days of tickets by technician. Each ticket shows **Response (min)** (from the ticket's effective start — 7am for anything raised outside 7am–9pm — to the first IT action), **Response met** (within 4 h) and **Resolved in 24 h** (24 SLA-clock hours). The totals row under each group gives that tech's averages; the bottom row is the team. HD4 writes the three figures once per ticket; they are never recalculated, so a reassignment does not move the credit.
+The **By IT Support (30 days)** view of the Tickets list groups the last 30 days of tickets by technician. Each ticket shows **Response (min)** (from the ticket's effective start — 7am for anything raised outside 7am–9pm — to the first IT action), **Response met** (within 4 h) and **Resolved in 24 h** (24 SLA-clock hours). The totals row under each group gives that tech's averages; the bottom row is the team. The same numbers, laid out properly, are on the **IT Dashboard → Service levels by technician** panel (HD15, refreshed every 5 minutes). HD4 writes the three figures once per ticket; they are never recalculated, so a reassignment does not move the credit.
 
 ## Clock, reports and reminders
 

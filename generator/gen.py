@@ -1675,10 +1675,46 @@ def hd15():
         *ranked("week", "Created_7", catkey, 8, "Week", "Busiest categories, last 7 days", 5, "Created_7"),
         *ranked("workload", "Open_working", "coalesce(item()?['AssignedTo']?['DisplayName'],'Unassigned')", 9, "Workload", "Open tickets by IT", 8, "Open_working"),
         *ranked("requesters", "Open_working", "coalesce(item()?['Requester']?['DisplayName'],'Unknown')", 10, "Requesters", "Open tickets by requester", 8, "Open_working"),
+        *tech_sla(),
     ])
     trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
             "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 21)], "minutes": list(range(0, 60, 5))}}}}
     return "HD15 Dashboard stats", trig, acts
+
+DASH_TECHSLA = 15   # "TechSLA" row on the Live overview list, rendered by the "Chart - Tech SLA" view
+def tech_sla():
+    """Per-technician service levels over the last 30 days (tickets in Created_30, by assignee): ticket count, average
+    first response (ResponseMinutes), % responded within 4h (ResponseMet) and % resolved within 24h (ResolvedMet).
+    Tech i uses Slot(4i+1..4i+4) and Share(3i+1..3i+3). Unrolled per tech - no loops, no variables."""
+    acts = []
+    item = {"id": DASH_TECHSLA, "item/Title": "TechSLA", "item/Sub": "Service levels by technician, last 30 days",
+            "item/Refreshed": f"@{nowET('h:mm tt')}"}
+    for i, (email, name) in enumerate(TECHS):
+        p = f"T{i}"
+        acts += [
+            (f"{p}_tickets", {"type": "Query", "inputs": {"from": "@body('Created_30')",
+                "where": f"@equals(toLower(coalesce(item()?['AssignedTo']?['Email'],'')),'{email.lower()}')"}}),
+            (f"{p}_responded", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(empty(item()?['ResponseMinutes']))"}}),
+            (f"{p}_minutes", {"type": "Select", "inputs": {"from": f"@body('{p}_responded')", "select": "@float(item()?['ResponseMinutes'])"}}),
+            (f"{p}_met", {"type": "Query", "inputs": {"from": f"@body('{p}_responded')", "where": "@equals(float(coalesce(item()?['ResponseMet'],0)),1)"}}),
+            (f"{p}_resolved", {"type": "Query", "inputs": {"from": f"@body('{p}_tickets')", "where": "@not(empty(item()?['ResolvedMet']))"}}),
+            (f"{p}_resmet", {"type": "Query", "inputs": {"from": f"@body('{p}_resolved')", "where": "@equals(float(coalesce(item()?['ResolvedMet'],0)),1)"}}),
+            # average minutes: sum via xpath over the JSON array (no loop needed)
+            (f"{p}_avg", compose(f"@if(equals(length(body('{p}_minutes')),0),-1,div(float(xpath(xml(json(concat('{{\"r\":{{\"i\":',string(body('{p}_minutes')),'}}}}'))),'sum(/r/i)')),float(length(body('{p}_minutes')))))")),
+        ]
+        avg = f"outputs('{p}_avg')"
+        nresp, nmet, nres, nresmet, ntick = (f"length(body('{p}_responded'))", f"length(body('{p}_met'))",
+                                             f"length(body('{p}_resolved'))", f"length(body('{p}_resmet'))", f"length(body('{p}_tickets'))")
+        item[f"item/Slot{4*i+1}"] = name
+        item[f"item/Slot{4*i+2}"] = f"@concat(string({ntick}),' ticket',if(equals({ntick},1),'','s'))"
+        item[f"item/Slot{4*i+3}"] = (f"@if(less({avg},0),'-',if(less({avg},60),concat(string(int(formatNumber({avg},'0'))),' min'),"
+                                     f"concat(string(div(int(formatNumber({avg},'0')),60)),' h ',string(mod(int(formatNumber({avg},'0')),60)),' min')))")
+        item[f"item/Slot{4*i+4}"] = f"@if(equals({nresp},0),'no responses yet',concat(string({nmet}),' of ',string({nresp})))"
+        item[f"item/Share{3*i+1}"] = f"@if(equals({nresp},0),-1,int(formatNumber(div(mul(float({nmet}),100),float({nresp})),'0')))"
+        item[f"item/Share{3*i+2}"] = f"@if(equals({nres},0),-1,int(formatNumber(div(mul(float({nresmet}),100),float({nres})),'0')))"
+        item[f"item/Share{3*i+3}"] = f"@{avg}"
+    acts.append(("Update_tech_sla", sp("PatchItem", {"table": DASH, **item})))
+    return acts
 
 # ---------- HD16 Health check ----------
 def hd16():
