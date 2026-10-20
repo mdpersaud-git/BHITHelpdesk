@@ -265,8 +265,8 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None, photo=None, re
         "body": [
             {"type": "TextBlock", "text": "IT Support [Branthaven] - New Ticket", "weight": "Bolder", "size": "Small", "color": "Accent", "wrap": True},
             {"type": "TextBlock", "text": f"IT-@{{{ID}}}: @{{{title}}}", "weight": "Bolder", "size": "Medium", "wrap": True},
-            *([{"type": "ColumnSet", "spacing": "Small", "isVisible": f"@not(empty({photo}))", "columns": [
-                {"type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [
+            *([{"type": "ColumnSet", "spacing": "Small", "columns": [
+                {"type": "Column", "width": "auto", "verticalContentAlignment": "Center", "isVisible": f"@not(empty({photo}))", "items": [
                     {"type": "Image", "url": f"@if(empty({photo}),'{BLANK_GIF}',{photo})", "size": "Small", "style": "Person"}]},
                 {"type": "Column", "width": "stretch", "verticalContentAlignment": "Center", "items": [
                     {"type": "TextBlock", "text": f"@{{{req_name}}}", "weight": "Bolder", "wrap": True},
