@@ -847,6 +847,9 @@ def hd4():
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
         ("Part_C_status_changed", {**cond(f"@not(equals({V},coalesce({t('LastNotifiedStatus')},'')))", partC),
                                    "runAfter": ra("Part_A_note_for_user", status=ALL)}),
+        # ticks between the SLA start (7am rule) and the first response; 0 when there is no first response yet
+        ("ResponseTicks", {**compose(f"@if(empty(variables('varFirstResponse')),0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))}))"),
+                           "runAfter": ra("Part_C_status_changed", status=ALL)}),
         ("Update_item", {**sp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{t('Title')}",
             "item/Status/Value": f"@{V}",
@@ -856,15 +859,15 @@ def hd4():
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
             # per-ticket SLA figures (feed the per-tech averages in the By IT Support view); written once, then kept
-            "item/ResponseMinutes": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,div(max(0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))})),600000000)),{t('ResponseMinutes')})",
-            "item/ResponseMet": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(lessOrEquals(max(0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))})),144000000000),1,0)),{t('ResponseMet')})",
+            "item/ResponseMinutes": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(less(outputs('ResponseTicks'),0),0,div(outputs('ResponseTicks'),600000000))),{t('ResponseMinutes')})",
+            "item/ResponseMet": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(lessOrEquals(outputs('ResponseTicks'),144000000000),1,0)),{t('ResponseMet')})",
             "item/ResolvedMet": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),if(lessOrEquals(float(coalesce({t('SLAHours')},0)),24),1,0),{t('ResolvedMet')})",
             # ResolvedOn is also stamped when a ticket goes straight to Closed (Quick close) so it counts as resolved
             "item/ResolvedOn": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),utcNow(),{t('ResolvedOn')})",
             "item/ClosedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_CLOSED}')),utcNow(),{t('ClosedOn')})",
             "item/WaitingHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_WAIT}')),0,{t('WaitingHours')})",
             "item/ResolvedHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_RES}')),0,{t('ResolvedHours')})"}),
-            "runAfter": ra("Part_C_status_changed", status=ALL)}),
+            "runAfter": ra("ResponseTicks", status=ALL)}),
     ])
     # Monitoring: did every requester/tech notification for this update go out?
     actions.update(self_check("Health", ["Close_guard", "Part_B_tech_assigned", "Part_A_note_for_user", "Part_C_status_changed"],
