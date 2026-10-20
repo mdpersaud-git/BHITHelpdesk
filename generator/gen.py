@@ -1588,14 +1588,24 @@ def hd15():
                 "item/Share3": "@if(equals(length(body('Responded')),0),-1,div(variables('varSumMin'),length(body('Responded'))))",
                 "item/Slot3": "Average first response",
                 "item/Slot6": "@concat(string(length(body('Responded'))),' tickets answered')"}
+        # Response timer starts when support is open: a ticket raised before 7am starts at 7:00 that day, one raised
+        # at/after 9pm starts at 7:00 the next day. (Ticks of the effective start, in UTC.)
+        c = "item()?['Created']"
+        h = f"int(convertTimeZone({c},'UTC','{TZ}','HH'))"
+        start_et = (f"if(less({h},7),concat(convertTimeZone({c},'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
+                    f"if(greaterOrEquals({h},21),concat(convertTimeZone(addDays({c},1),'UTC','{TZ}','yyyy-MM-dd'),'T07:00:00'),"
+                    f"convertTimeZone({c},'UTC','{TZ}','yyyy-MM-ddTHH:mm:ss')))")
+        start = f"ticks(convertTimeZone({start_et},'{TZ}','UTC'))"
+        fr = "ticks(item()?['FirstResponseOn'])"
+        wait = f"max(0,sub({fr},{start}))"
         return [
             ("Resp_elig", {"type": "Query", "inputs": {"from": "@body('Created_30')", "where":
-                "@if(empty(item()?['FirstResponseOn']),less(ticks(item()?['Created']),ticks(addHours(utcNow(),-4))),true)"}}),
+                f"@if(empty(item()?['FirstResponseOn']),less({start},ticks(addHours(utcNow(),-4))),true)"}}),
             ("Resp_ok", {"type": "Query", "inputs": {"from": "@body('Resp_elig')", "where":
-                "@if(empty(item()?['FirstResponseOn']),false,lessOrEquals(sub(ticks(item()?['FirstResponseOn']),ticks(item()?['Created'])),144000000000))"}}),
+                f"@if(empty(item()?['FirstResponseOn']),false,lessOrEquals({wait},144000000000))"}}),
             ("Responded", {"type": "Query", "inputs": {"from": "@body('Created_30')", "where": "@not(empty(item()?['FirstResponseOn']))"}}),
             ("Resp_minutes", {"type": "Select", "inputs": {"from": "@body('Responded')",
-                "select": "@div(sub(ticks(item()?['FirstResponseOn']),ticks(item()?['Created'])),600000000)"}}),
+                "select": f"@div({wait},600000000)"}}),
             ("Reset_sum", {"type": "SetVariable", "inputs": {"name": "varSumMin", "value": 0}}),
             ("Foreach_sum", {"type": "Foreach", "foreach": "@body('Resp_minutes')", "actions": seq([
                 ("Add_sum", {"type": "IncrementVariable", "inputs": {"name": "varSumMin", "value": "@items('Foreach_sum')"}})]), **conc1}),
