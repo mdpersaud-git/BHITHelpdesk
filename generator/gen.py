@@ -858,23 +858,31 @@ def hd4():
             "item/NoteToUser": "@null",
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
-            # per-ticket SLA figures (feed the per-tech averages in the By IT Support view); written once, then kept
-            "item/ResponseMinutes": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(less(outputs('ResponseTicks'),0),0,div(outputs('ResponseTicks'),600000000))),{t('ResponseMinutes')})",
-            "item/ResponseMet": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(lessOrEquals(outputs('ResponseTicks'),144000000000),1,0)),{t('ResponseMet')})",
-            "item/ResolvedMet": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),if(lessOrEquals(float(coalesce({t('SLAHours')},0)),24),1,0),{t('ResolvedMet')})",
             # ResolvedOn is also stamped when a ticket goes straight to Closed (Quick close) so it counts as resolved
             "item/ResolvedOn": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),utcNow(),{t('ResolvedOn')})",
             "item/ClosedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_CLOSED}')),utcNow(),{t('ClosedOn')})",
             "item/WaitingHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_WAIT}')),0,{t('WaitingHours')})",
             "item/ResolvedHours": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_RES}')),0,{t('ResolvedHours')})"}),
             "runAfter": ra("ResponseTicks", status=ALL)}),
+        # Per-ticket SLA figures (feed the per-tech averages in the By IT Support view), written once via REST so the
+        # flow does not depend on the SharePoint connector having refreshed its column schema.
+        ("Write_SLA_figures", {**cond(
+            f"@or(and(empty({t('FirstResponseOn')}),not(empty(variables('varFirstResponse')))),"
+            f"and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})))",
+            {"Merge_SLA_figures": sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})",
+                body={
+                    "ResponseMinutes": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(less(outputs('ResponseTicks'),0),0,div(outputs('ResponseTicks'),600000000))),{t('ResponseMinutes')})",
+                    "ResponseMet": f"@if(empty({t('FirstResponseOn')}),if(empty(variables('varFirstResponse')),null,if(lessOrEquals(outputs('ResponseTicks'),144000000000),1,0)),{t('ResponseMet')})",
+                    "ResolvedMet": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),if(lessOrEquals(float(coalesce({t('SLAHours')},0)),24),1,0),{t('ResolvedMet')})"},
+                headers={"IF-MATCH": "*", "X-HTTP-Method": "MERGE"})}),
+            "runAfter": ra("Update_item", status=("Succeeded", "Failed"))}),
     ])
     # Monitoring: did every requester/tech notification for this update go out?
     actions.update(self_check("Health", ["Close_guard", "Part_B_tech_assigned", "Part_A_note_for_user", "Part_C_status_changed"],
         f"[Help desk health] Notification problem on ticket update IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
-        f"concat('IT-',{ID},' (updated)')", after=ra("Update_item", status=ALL)))
+        f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL)))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
