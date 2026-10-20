@@ -1677,7 +1677,8 @@ def hd16():
         ("Working", sp("GetItems", {"$filter": f"({working}) and Created lt '@{{addMinutes(utcNow(),-90)}}'", "$top": 500})),
         ("Touched", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
             "where": f"@greater(ticks({it('Modified')}),ticks(addHours(utcNow(),-3)))"}}),
-        ("ClockStalled", compose("@and(greater(length(body('Working')?['value']),0),equals(length(body('Touched')),0))")),
+        # HD6 runs 8:00-21:00; before its first run of the day "nothing touched in 3 h" is just overnight, not a fault
+        ("ClockStalled", compose(f"@and(greaterOrEquals(int({nowET('HH')}),8),greater(length(body('Working')?['value']),0),equals(length(body('Touched')),0))")),
         ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
         ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
             "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
@@ -1718,7 +1719,7 @@ def hd16():
             "item/Slot1": "New tickets set up", "item/Share1": "@if(greater(length(body('Incomplete')),0),100,0)",
             "item/Slot6": "@concat(length(body('Recent')?['value']),' created in 24h, ',length(body('Incomplete')),' incomplete')",
             "item/Slot2": "Hourly clock (HD6)", "item/Share2": "@if(outputs('ClockStalled'),100,0)",
-            "item/Slot7": "@if(outputs('ClockStalled'),'no open ticket updated in 3 h',concat(length(body('Working')?['value']),' open tickets being tracked'))",
+            "item/Slot7": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(less(int({nowET('HH')}),8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked')))",
             "item/Slot3": "Auto-close (HD6)", "item/Share3": "@if(greater(length(body('StuckResolved')?['value']),0),100,0)",
             "item/Slot8": "@if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),'resolved tickets closing on time')",
             "item/Slot4": "Emails not ticketed", "item/Share4": "@if(outputs('ReviewOk'),if(greater(outputs('ReviewCount'),0),50,0),-1)",
