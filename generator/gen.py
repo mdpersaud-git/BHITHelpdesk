@@ -1878,6 +1878,38 @@ def build_definition(name, triggers, actions):
                            "$connections": {"defaultValue": {}, "type": "Object"}},
             "triggers": triggers, "actions": actions, "outputs": {}}
 
+# ---------- HD17 Fix ticket permissions (run once) ----------
+def hd17():
+    """One-off: make the Tickets list stop inheriting from the site (drop Visitors/Members), then give every
+    existing ticket its own permissions exactly as HD3 does for new ones (Owners full control, requester Read)."""
+    L = f"_api/web/lists(guid'{TICKETS}')"
+    trig = {"manual": {"type": "Request", "kind": "Button", "inputs": {"schema": {"type": "object", "properties": {}, "required": []}}}}
+    it = lambda k: f"items('Each_ticket')?['{k}']"
+    per_item = seq([
+        ("ReqEmail", compose(f"@toLower(coalesce({it('RequesterEmail')},{it('Requester')}?['EMail'],''))")),
+        ("Break_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
+        ("Owners_on_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Has_requester", cond("@and(not(empty(outputs('ReqEmail')))," + is_internal("outputs('ReqEmail')") + ")", seq([
+            ("Ensure_requester", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('ReqEmail')}\"}")),
+            ("Requester_read", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
+        ]))),
+    ])
+    acts = seq([
+        ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup?$select=Id")),
+        ("Get_visitor_group", sp_http("GET", "_api/web/associatedvisitorgroup?$select=Id")),
+        ("Get_member_group", sp_http("GET", "_api/web/associatedmembergroup?$select=Id")),
+        ("Break_list", sp_http("POST", f"{L}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=true)")),
+        ("Remove_visitors", sp_http("POST", f"{L}/roleassignments/removeroleassignment(principalid=@{{body('Get_visitor_group')?['Id']}})")),
+        ("Remove_members", sp_http("POST", f"{L}/roleassignments/removeroleassignment(principalid=@{{body('Get_member_group')?['Id']}})")),
+        ("Get_tickets", sp_http("GET", f"{L}/items?$select=Id,RequesterEmail,Requester/EMail&$expand=Requester&$top=5000")),
+        ("Each_ticket", {"type": "Foreach", "foreach": "@body('Get_tickets')?['value']", "actions": per_item,
+                         "runtimeConfiguration": {"concurrency": {"repetitions": 1}}}),
+    ])
+    # removing a group that is already gone must not stop the run
+    acts["Remove_members"]["runAfter"] = ra("Remove_visitors", status=("Succeeded", "Failed"))
+    acts["Get_tickets"]["runAfter"] = ra("Remove_members", status=("Succeeded", "Failed"))
+    return "HD17 Fix ticket permissions (run once)", trig, acts
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -1936,7 +1968,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
