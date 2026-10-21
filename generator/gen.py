@@ -608,13 +608,13 @@ def hd3():
         ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
         ("Tag", compose(f"@concat('IT-',{ID})")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
-        ("Break_inheritance", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
-        ("Give_owners_full_control", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
+        ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
         # external senders have no SharePoint identity: nothing to grant, they work the ticket by email
         ("Has_requester", cond("@and(not(empty(outputs('ReqEmail'))),outputs('IsInternal'))", seq([
             ("Ensure_requester", sp_http("POST", "_api/web/ensureuser",
                 body="{\"logonName\":\"i:0#.f|membership|@{outputs('ReqEmail')}\"}")),
-            ("Give_requester_read", sp_http("POST", f"_api/web/lists/getbytitle('Tickets')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
+            ("Give_requester_read", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
         ]))),
         ("Create_a_task", op("shared_planner", "CreateTask_V3", {
             "body/groupId": GROUP, "body/planId": PLAN,
@@ -630,7 +630,7 @@ def hd3():
         ("Wait_for_attachment", {"type": "Wait", "inputs": {"interval": {"count": 10, "unit": "Second"}}}),
         ("Get_ticket", sp("GetItem", {"id": f"@{ID}"})),
         ("HasPic", compose("@equals(body('Get_ticket')?['{HasAttachments}'],true)")),
-        ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'22c09b0b-bbcd-42a9-9aeb-844d81089636')/items(@{{{ID}}})/AttachmentFiles")),
+        ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/AttachmentFiles")),
         ("PicUrl", compose("@if(outputs('HasPic'),concat('https://branthavenhomes.sharepoint.com',coalesce(first(body('Get_attachments')?['value'])?['ServerRelativeUrl'],'')),'')")),
         ("IsOpenNow", compose(
             f"@and(greaterOrEquals(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),7),less(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),21))")),
