@@ -76,7 +76,7 @@ Add the flow first: Power Automate icon (left bar) > Add flow > HD14 Teams app i
   1. green check in a pale-green circle (56px, `#dcfce7` / `#16a34a`)
   2. `"We've got it, " & First(Split(User().FullName, " ")).Value`
   3. black pill with `"IT-" & varTicket.ticketid`
-  4. `txtWhat.Text` in grey
+  4. a small uppercase label **TICKET DETAILS** (10px bold, letter-spacing 1px, `#1a1a1a`), then `txtWhat.Text` in grey on the next line (`<span …>TICKET DETAILS</span><br>` inside the same grey div, margin-top 14px)
   5. grey box (`#f6f6f8`, border `#e1e2eb`, radius 10, max-width 460) with three numbered steps:
      1. A confirmation is on its way to you by email and Teams.
      2. IT Support will pick it up shortly — you'll see every status change in Teams and email.
