@@ -99,7 +99,7 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 
 - The **IT Support Tickets** list has **unique permissions** (it does not inherit from the site): only the site Owners group (IT Support). The site's Visitors group (BH Head Office) and Members must *not* be on the list, or every staff member can read every ticket.
 - HD3 then breaks inheritance on each new ticket and grants Owners full control and the requester **Read** on their own item. Requesters update a ticket by replying (email "Reply to IT" / Teams chat), never by editing the list.
-- The flows address the list by GUID (`TICKETS` in `gen.py`), never by title — renaming the list must not break them. (Until Oct 2026 the permission steps used the old title `Tickets` and failed silently after the list was renamed; tickets created before the fix needed a one-time backfill.)
+- The flows address the list by GUID (`TICKETS` in `gen.py`), never by title — renaming the list must not break them. (Until Oct 2026 the permission steps used the old title `Tickets` and failed silently after the list was renamed; tickets created before the fix were backfilled with `docs/fix-ticket-permissions.js`, which can be re-run any time from the browser console.)
 - Check: `…/_api/web/lists(guid'22c09b0b-…')?$select=HasUniqueRoleAssignments` should be `true` for the list and for every item.
 
 ## When something looks wrong
