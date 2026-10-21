@@ -168,7 +168,7 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
             # light up the Notifications card on the IT dashboard (HD16 turns it green again after 24h clean)
             (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health",
                 "item/Share5": 100, "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
-                "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',join(body('{prefix}_names'),', '),', ',{nowET('MMM d h:mm tt')})"},
+                "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',string(length(body('{prefix}_problems'))),' step(s) failed, ',{nowET('MMM d h:mm tt')},' (details emailed)')"},
                 after=ra(f"{prefix}_teams", status=("Succeeded", "Failed")))),
         ]))),
     ])
@@ -1776,6 +1776,7 @@ def hd16():
             f"if(empty(coalesce({it('PlannerTaskId')},'')),'no Planner task; ',''),"
             f"if(empty(coalesce({it('ChannelMessageId')},'')),'no channel post; ',''),"
             f"if(not(contains(coalesce({it('Conversation')},''),'Ticket created')),'HD3 did not finish; ',''),')'")}}),
+        ("Incomplete_ids", {"type": "Select", "inputs": {"from": "@body('Incomplete')", "select": f"@concat('IT-',{it('ID')})"}}),
         ("Working", sp("GetItems", {"$filter": f"({working}) and Created lt '@{{addMinutes(utcNow(),-90)}}'", "$top": 500})),
         ("Touched", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
             "where": f"@greater(ticks({it('Modified')}),ticks(addHours(utcNow(),-3)))"}}),
@@ -1784,7 +1785,8 @@ def hd16():
         ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
         ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
             "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
-        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_lines", status=ANY), "actions": seq([
+        ("StuckResolved_ids", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']", "select": f"@concat('IT-',{it('ID')})"}}),
+        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_ids", status=ANY), "actions": seq([
             ("Find_folder", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders?$filter=displayName eq 'Review'&$select=id"})),
             ("Find_subfolder", op("shared_office365", "HttpRequest", {"Method": "GET",
@@ -1812,10 +1814,9 @@ def hd16():
         ("IssueCount", compose("@add(add(add(length(body('Incomplete')),length(body('StuckResolved')?['value'])),if(outputs('ClockStalled'),1,0)),if(outputs('NotifyRecent'),1,0))")),
         ("Details", compose(
             "@trim(concat("
-            "if(greater(length(body('Incomplete')),0),concat('New tickets with incomplete setup: ',join(body('Incomplete_lines'),''),decodeUriComponent('%0A')),''),"
-            "if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours - check HD6 run history.',decodeUriComponent('%0A')),''),"
-            "if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_lines'),''),decodeUriComponent('%0A')),''),"
-            f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],decodeUriComponent('%0A')),'')))")),
+            "if(greater(length(body('Incomplete')),0),concat('Incomplete setup (no Planner task / channel post): ',join(body('Incomplete_ids'),', '),' — resubmit their HD3 runs or close them.',decodeUriComponent('%0A')),''),"
+            "if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours — check HD6 run history.',decodeUriComponent('%0A')),''),"
+            "if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_ids'),', '),decodeUriComponent('%0A')),'')))")),
         ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "IT Ticket Systems Health",
             "item/Total": "@outputs('IssueCount')", "item/Refreshed": f"@{nowET('h:mm tt')}",
             "item/Slot1": "New tickets set up", "item/Share1": "@if(greater(length(body('Incomplete')),0),100,0)",

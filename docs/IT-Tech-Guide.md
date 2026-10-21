@@ -66,7 +66,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 ## Monitoring (is the system healthy?)
 
-**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Five cards, each green OK / amber CHECK / red PROBLEM, refreshed every hour 7am–9pm by HD16:
+**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Five cards, each green OK / amber CHECK / red PROBLEM, refreshed every hour 7am–9pm by HD16. Under the cards, a one-line-per-problem summary (ticket numbers only; the detail is in the daily health email):
 
 | Card | What it checks | Red means |
 |---|---|---|
@@ -74,7 +74,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 | Hourly clock (HD6) | At least one open ticket has been touched in the last 3 h | HD6 stopped — SLA clock, reminders and auto-close are all off |
 | Auto-close (HD6) | No ticket resolved more than 72 h ago is still "Resolved Pending Confirmation" | Auto-close isn't firing |
 | Emails not ticketed | Mail in the mailbox's **Review** folder in the last 24 h, ignoring the help desk's own notifications and Microsoft system mail (amber, not red — it's a "go look" not a failure) | — |
-| Notifications (HD3/HD4) | HD3/HD4 reported a failed requester/tech notification in the last 24 h | A requester or tech did not get a message — the card says which ticket and step |
+| Notifications (HD3/HD4) | HD3/HD4 reported a failed requester/tech notification in the last 24 h | A requester or tech did not get a message — the card names the ticket and how many steps failed; the alert email/Teams message from HD3/HD4 has the step names and error text |
 
 Behind the panel, three layers of alerts all go to Martin:
 
