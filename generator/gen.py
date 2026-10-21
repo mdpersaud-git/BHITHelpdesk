@@ -1546,7 +1546,7 @@ def hd15():
         loop = {"type": "Foreach", "foreach": "@" + arr(names), "actions": seq([
             (f"Count_{p}", {"type": "Query", "inputs": {"from": f"@body('{src}')", "where": where}}),
             (f"Label_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varLabels", "value":
-                f"@if(equals(length(body('Count_{p}')),0),'',concat(items('Foreach_{p}'),'  ',string(length(body('Count_{p}')))))"}}),
+                f"@if(equals(length(body('Count_{p}')),0),'',concat(items('Foreach_{p}'),' [',string(length(body('Count_{p}'))),']'))"}}),
             (f"Share_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varShares", "value":
                 f"@float(formatNumber(div(mul(float(length(body('Count_{p}'))),100),float(max(length(body('{src}')),1))),'0.00'))"}}),
         ]), **conc1}
