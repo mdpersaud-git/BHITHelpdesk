@@ -2,6 +2,7 @@ import json, uuid, os, zipfile, shutil, copy
 
 OUT = os.path.join(os.path.dirname(__file__), 'out')
 SITE = "https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2"
+ENV = "Default-26e851a0-5d3b-4687-80a3-7d758c6fc2b2"   # Power Automate environment (for links in alerts)
 TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
 EXTERNAL_SENDERS = "37b12028-370c-4b21-b31c-11362129c7fe"   # "External Senders" allow-list: Title = domain or full address
@@ -178,11 +179,13 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
         (f"{prefix}_names", {"type": "Select", "inputs": {"from": f"@body('{prefix}_problems')", "select": "@item()?['name']"}}),
         (f"{prefix}_alert", cond(f"@greater(length(body('{prefix}_problems')),0)", seq([
             (f"{prefix}_email", mail(ME, subject, html)),
-            # stamp the dashboard (HD16 shows it in the problem band for 24h). Alerts are email only - no Teams DMs.
+            (f"{prefix}_teams", {"type": "Scope", "runAfter": ra(f"{prefix}_email", status=("Succeeded", "Failed")),
+                                 "actions": support_msg(f"{prefix}_dm", ME, html)}),
+            # stamp the dashboard (HD16 shows it in the problem band for 24h)
             (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health",
                 "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
                 "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',string(length(body('{prefix}_problems'))),' step(s) failed, ',{nowET('MMM d h:mm tt')},' (details emailed)')"},
-                after=ra(f"{prefix}_email", status=("Succeeded", "Failed")))),
+                after=ra(f"{prefix}_teams", status=("Succeeded", "Failed")))),
         ]))),
     ])
 
@@ -551,6 +554,19 @@ def hd1():
         # skip inline images (signature logos); only real attachments go on the ticket
         ("Real_attachments", {"type": "Query", "inputs": {"from": "@coalesce(triggerOutputs()?['body/attachments'],json('[]'))",
                                                           "where": "@not(equals(item()?['isInline'],true))"}}),
+        # Power Automate's own alerts ("Your flow 'HD3' failed", "connection isn't working", weekly digests) arrive
+        # in the IT Support mailbox because IT Support owns the flows. Relay them to Martin by email and Teams.
+        ("Is_a_Power_Automate_alert", cond(
+            f"@and(endsWith(outputs('Sender'),'@microsoft.com'),or(contains(toLower(coalesce({T},'')),'flow'),contains(toLower(coalesce({T},'')),'isn''t working'),contains(toLower(coalesce({T},'')),'failed')))",
+            seq([
+                ("Relay_alert_email", mail(ME, f"[Help desk health] @{{{T}}}",
+                    "<p style=\"color:#888;font-size:12px\">Relayed from the IT Support mailbox (Power Automate alert).</p>@{triggerOutputs()?['body/body']}")),
+                ("Relay_alert_teams", {"type": "Scope", "runAfter": ra("Relay_alert_email", status=("Succeeded", "Failed")),
+                    "actions": support_msg("Relay_alert_dm", ME,
+                        f"<p><b>Power Automate alert:</b> @{{{T}}}</p><p>Details are in your email. <a href=\"https://make.powerautomate.com/environments/{ENV}/flows\">Open the flows</a></p>")}),
+                ("Move_alert_to_Review", {**move(F_REVIEW), "runAfter": ra("Relay_alert_teams", status=("Succeeded", "Failed"))}),
+                ("Terminate_alert", {"type": "Terminate", "runAfter": ra("Move_alert_to_Review", status=("Succeeded", "Failed")), "inputs": {"runStatus": "Succeeded"}}),
+            ]))),
         ("Is_it_a_real_email_from_a_known_sender", cond(
             f"@and(or(outputs('IsInternal'),outputs('IsAllowedExternal')),not(equals(outputs('Sender'),toLower('{MBX}'))),"
             f"not(startsWith(coalesce({T},''),'Automatic reply')),not(startsWith(coalesce({T},''),'Undeliverable')))",
@@ -1961,9 +1977,11 @@ def hd16():
         ("Daily_email", cond(f"@equals({hourET},9)", {
             "Email_report": mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear',concat('PROBLEMS: ',string(outputs('IssueCount')))))}",
                                  "@{outputs('Report')}")})),
-        # alerts are email only (no Teams DMs for monitoring), and only when the issue count changes, 7am-9pm
-        ("Email_if_changed", {**cond(f"@and({office},greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
-            {"Email_change": mail(ME, "@{concat('[Help desk health] PROBLEMS: ',string(outputs('IssueCount')))}", "@{outputs('Report')}")}),
+        # alert Martin (email + Teams) only when the issue count changes, 7am-9pm; overnight problems wait for 7:30
+        ("Alert_if_changed", {**cond(f"@and({office},greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
+            seq([("Email_change", mail(ME, "@{concat('[Help desk health] PROBLEMS: ',string(outputs('IssueCount')))}", "@{outputs('Report')}")),
+                 ("Teams_change", {"type": "Scope", "runAfter": ra("Email_change", status=("Succeeded", "Failed")),
+                                   "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")})])),
             "runAfter": ra("Daily_email", status=ANY)}),
     ])
     acts["Inbox_old"]["runAfter"] = ra("Unnotified_ids", status=ANY)
