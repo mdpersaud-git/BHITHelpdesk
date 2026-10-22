@@ -117,3 +117,16 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Health check · HD17 Fix ticket permissions (run once).
 
 *Flows are generated from `generator/gen.py`. Never edit the live flows directly without updating the generator.*
+
+Live flow IDs (environment Default-26e851a0…, rebuilt 2026-10-21 after the Outlook connection was replaced). When importing a zip with **Update**, pick the flow with this ID — never *Create as new*:
+
+| Flow | ID (first 8) | Flow | ID (first 8) |
+|---|---|---|---|
+| HD1 Email intake | 3975d310 | HD9 Card actions | 90dd749d (original — Teams card responses are bound to it) |
+| HD2 Form intake | e4d7a201 | HD11 Tech thread replies | bfd6591a |
+| HD3 Ticket created | c646c647 | HD12 Requester replies in Teams | 2eb059df |
+| HD4 Ticket updated | 5f9a1671 | HD13 Setup pending-replies (off) | b747215c |
+| HD5 Planner task completed | 0cd62cf6 | HD14 Teams app intake | 4bede0e5 (under *Shared with me*; the app calls it by ID) |
+| HD6 Hourly clock | 964cba3d | HD15 Dashboard stats | bd04cabb |
+| HD7 My open tickets | 7172c1c0 | HD16 Health check | 482dc407 |
+| HD8 Daily report | 3c9907f7 | HD17 Fix ticket permissions (off) | 1a62b6b6 |
