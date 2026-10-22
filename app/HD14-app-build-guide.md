@@ -35,18 +35,20 @@ The header is always dark regardless of theme. The confirmation panel (HtmlText2
 colW = Min(App.Width, Max(710, App.Width - 64), 1500);
 colX = (App.Width - colW) / 2;
 isPhone = App.Width < 520;
+isNarrow = App.Width < 760;
 ```
+`isPhone` drives the phone-only changes (shorter urgency labels, stacked confirmation buttons); `isNarrow` drives the compact header (logo above the title) and also covers the Teams side panel. Desktop/Teams-tab widths (≥ 760) are unaffected by either.
 
 ### Layout containers (Screen1)
 | Control | Type | Key properties |
 |---|---|---|
 | `Screen1` | Screen | Fill `varBg` |
 | `recHeader` | Rectangle | X 0, Y 0, Width `App.Width`, Fill `RGBA(26,26,26,1)` (always dark), Height `Max(120, lblSub.Y+lblSub.Height+16)` |
-| `lblTitle` | Label | "How can IT help?", Color `Color.White`, Size 28, X `colX+40`, Width `If(isPhone, colW-70, colW-80-HtmlText1_1.Width)` |
-| `lblSub` | Label | "Tell us what's going on. You'll get a confirmation email and an update in Teams.", Color `RGBA(200,200,205,1)`, AutoHeight true, same X/Width as lblTitle |
-| `Image1` | Image | **The Branthaven wordmark.** Image = data URI of `LogoWhite.svg` (see below). Width 220, Height 20, ImagePosition Fit, X `txtWhat.X+txtWhat.Width-Self.Width`, Y `lblTitle.Y+lblTitle.Height/2-Self.Height/2` |
+| `lblTitle` | Label | "How can IT help?", Color `Color.White`, X `colX+40`, Size `If(isNarrow, 22, 28)`, Height `If(isNarrow, 32, 44)`, Y `If(isNarrow, Image1.Y + Image1.Height + 6, 22)`, Width `If(isNarrow, colW-70, colW-80-HtmlText1_1.Width)` |
+| `lblSub` | Label | "Tell us what's going on. You'll get a confirmation email and an update in Teams.", Color `RGBA(200,200,205,1)`, AutoHeight true, Size `If(isNarrow, 12, 14)`, Y `lblTitle.Y + If(isNarrow, 32, 50)`, same X/Width as lblTitle |
+| `Image1` | Image | **The Branthaven wordmark.** Image = data URI of `LogoWhite.svg` (see below). ImagePosition Fit. Desktop: top-right of the header, Width 220 / Height 20. Narrow: sits **above** the title at the left edge, smaller. Formulas: Width `If(isNarrow, 165, 220)`, Height `If(isNarrow, 15, 20)`, X `If(isNarrow, txtWhat.X, txtWhat.X + txtWhat.Width - Self.Width)`, Y `If(isNarrow, 12, 34)` |
 | `HtmlText1_1` | HTML text | Old text logo — kept hidden (`Visible false`) because lblTitle/lblSub widths reference it |
-| `recCard` | Rectangle | White card. Fill `varCardBg`, BorderThickness 0, Y `lblWhat.Y-24`, X `App.Width/2-Self.Width/2`, Width `If(IsBlank(varTicket), txtWhat.Width+48, Min(txtWhat.Width+48, 760))`, Height `If(IsBlank(varTicket), btnSubmit.Y+btnSubmit.Height+24-Self.Y, btnAnother.Y+btnAnother.Height+40-Self.Y)` — Send to back |
+| `recCard` | Rectangle | White card. Fill `varCardBg`, BorderThickness 0, Y `lblWhat.Y-24`, X `App.Width/2-Self.Width/2`, Width `If(IsBlank(varTicket), txtWhat.Width+48, Min(txtWhat.Width+48, 760))`, Height `If(IsBlank(varTicket), btnSubmit.Y+btnSubmit.Height+24-Self.Y, btnAnother_2.Y+btnAnother_2.Height+40-Self.Y)` (btnAnother_2 is the lowest button when they stack on a phone) — Send to back |
 | `recDone` | Rectangle | Confirmation cover. Same X/Y/Width/Height as recCard, Fill `varCardBg`, BorderThickness 0, Visible `!IsBlank(varTicket)`. Z-order: above every form control, below HtmlText2 and the three confirmation buttons |
 | `HtmlText1` | HTML text | Footer. X 0, Width `App.Width`, Y `recCard.Y+recCard.Height`, Height 60, all Padding 0. HtmlText: `"<div style='text-align:center;font-family:Open Sans,sans-serif;font-size:12px;color:#8a8a8a;padding:10px 0;'>Developed by <b style='color:#1a1a1a;letter-spacing:0.5px;'>BRANTHAVEN</b></div>"` |
 | `Rectangle1` | Rectangle | Legacy fixed panel — `Visible false`, leave in place |
@@ -61,7 +63,7 @@ All form controls have `Visible: IsBlank(varTicket)` so they disappear on confir
   - Items: `["Access Request", "Application", "Bookings", "BuilderGo/OnLocation Warranty", "Email", "Horizon", "InFormXL", "Landline", "Laptop / Desktop", "Mobile (iPad / Cell)", "Mouse / Keyboard / Monitor", "New User Setup", "NewStar", "OneDrive / SharePoint", "Other", "Password or Sign-In", "Printer", "SaleFish", "SaleXpress", "Teams", "VPN"]` — must match the Category choices on the Tickets list exactly.
   - **Default:** the keyword formula in `ddCategory-Default.fx`. It reads `txtWhat.Text & txtDetails.Text` on every keystroke (app names first, then generic IT terms, falls back to Other). The user can still change it. Do not replace this with an OnChange/variable version — that loses as-you-type detection.
 - `Label2` — the **"auto-detected" badge** next to the category label: Text "auto-detected", Size 9, Fill `If(varDark, RGBA(40,60,90,1), RGBA(232,240,254,1))`, Color blue, Width 96, Height 20, X `lblCat.X+90`, Y centred on lblCat, Visible `IsBlank(varTicket) && ddCategory.Selected.Value <> "Other" && Len(txtWhat.Text & txtDetails.Text) > 0`
-- `lblUrg` "HOW URGENT IS IT?" + segmented control of three Buttons `Button1`, `Button1_1`, `Button1_2` (texts "I can't work at all", "It's slowing me down", "No rush"). Each: Width `txtWhat.Width/3`, X chained (`Button1.X+Button1.Width`, etc.), BorderStyle Solid, BorderColor `varBorder`, outer corners radius 10 and inner corners 0 so they read as one strip. Fill `If(varUrgency = <its text>, varSegBg, varCardBg)`, Color likewise; OnSelect `Set(varUrgency, "<its text>")`. (The original `rdUrgency` Radio still exists hidden; HD14 is passed `varUrgency`.)
+- `lblUrg` "HOW URGENT IS IT?" + segmented control of three Buttons `Button1`, `Button1_1`, `Button1_2`. Texts shorten on a phone so they fit: `If(isPhone, "Can't work", "I can't work at all")`, `If(isPhone, "Slowing me down", "It's slowing me down")`, "No rush"; Size `If(isPhone, 12, 14)`. The `varUrgency` value set in OnSelect stays the full desktop text on every width. Each: Width `txtWhat.Width/3`, X chained (`Button1.X+Button1.Width`, etc.), BorderStyle Solid, BorderColor `varBorder`, outer corners radius 10 and inner corners 0 so they read as one strip. Fill `If(varUrgency = <its text>, varSegBg, varCardBg)`, Color likewise; OnSelect `Set(varUrgency, "<its text>")`. (The original `rdUrgency` Radio still exists hidden; HD14 is passed `varUrgency`.)
 - `lblDet` "DETAILS *" + Text input `txtDetails`: Mode MultiLine, HintText "What happened, and when did it start?"
 - `AddMediaWithImage1` (Add picture): the screenshot drop-zone, dashed border, X `txtWhat.X`, Width `txtWhat.Width`. Its button `AddMediaButton1` has Height `If(IsBlank(Self.Media), 90, 240)` so the box opens up once a picture is attached; child `UploadedImage1` same X/Width, ImagePosition **Fit** (never Fill — it stretched screenshots into a strip), Y `AddMediaButton1.Y + 36`, Height `If(IsBlank(AddMediaButton1.Media), 48, 196)`. Everything below chains off it so it moves down with the picture: `Label1.Y = AddMediaButton1.Y + AddMediaButton1.Height + 10`, `lblOnBehalf.Y = Label1.Y + 40`, `txtOnBehalf.Y = lblOnBehalf.Y + 24`, `btnSubmit.Y = txtOnBehalf.Y + 54`. `Label1`: "One picture only. To send more, reply to your confirmation email.", Color `varSubtext`, Visible `IsBlank(varTicket) && Parent.Width >= 520`
 - `lblOnBehalf` "ON BEHALF OF ANOTHER USER (OPTIONAL)" + Text input `txtOnBehalf`, HintText "Colleague's email, e.g. jane@branthaven.com (leave blank for yourself)"
@@ -72,7 +74,7 @@ All form controls have `Visible: IsBlank(varTicket)` so they disappear on confir
 Add the flow first: Power Automate icon (left bar) > Add flow > HD14 Teams app intake. The formula name is the flow name without spaces.
 
 ### Confirmation (same screen, shown when `varTicket` is set)
-- `HtmlText2` — the whole confirmation panel in one HTML control. X `recCard.X`, Width `recCard.Width`, Y `recCard.Y+56`, Height 350, Visible `!IsBlank(varTicket)`. Content, centred:
+- `HtmlText2` — the whole confirmation panel in one HTML control. X `recCard.X`, Width `recCard.Width`, Y `recCard.Y+56`, Height `If(isPhone, 440, 350)` (the steps box wraps to more lines on a phone), Visible `!IsBlank(varTicket)`. Content, centred:
   1. green check in a pale-green circle (56px, `#dcfce7` / `#16a34a`)
   2. `"We've got it, " & First(Split(User().FullName, " ")).Value`
   3. black pill with `"IT-" & varTicket.ticketid`
@@ -81,10 +83,12 @@ Add the flow first: Power Automate icon (left bar) > Add flow > HD14 Teams app i
      1. A confirmation is on its way to you by email and Teams.
      2. IT Support will pick it up shortly — you'll see every status change in Teams and email.
      3. Need to add something? Reply to the email or the IT Support chat.
-- Three outlined buttons, each Width 188, Height 40, Size 12, Fill `varCardBg`, Color `varText`, BorderColor `varBorder` (Report another issue uses `varText`), HoverFill `RGBA(240,240,243,1)`, Y `HtmlText2.Y+HtmlText2.Height+4`, Visible `!IsBlank(varTicket)`; X measured from the card centre `recCard.X+recCard.Width/2`:
-  - `btnAnother_1` "View this ticket" — centre − 294 (opens the ticket as before)
-  - `btnAnother` "Report another issue" — centre − 196. OnSelect: `Set(varSuggestedCategory, ""); Reset(txtWhat); Reset(ddCategory); Reset(rdUrgency); Reset(txtDetails); Reset(txtOnBehalf); Reset(AddMediaButton1); Set(varShot, Blank()); Set(varTicket, Blank())`
-  - `btnAnother_2` "My open tickets ↗" — centre + 106 (same action as the old "My Tickets")
+- Three outlined buttons, Height 40, Size 12, Fill `varCardBg`, Color `varText`, BorderColor `varBorder` (Report another issue uses `varText`), HoverFill `RGBA(240,240,243,1)`, Visible `!IsBlank(varTicket)`. On desktop they sit in one row (Width 188, X measured from the card centre `recCard.X+recCard.Width/2`); on a phone they stack full-width, 48px apart. Width on all three: `If(isPhone, recCard.Width - 32, 188)`.
+  - `btnAnother_1` "View this ticket" — Y `HtmlText2.Y+HtmlText2.Height+4`, X `If(isPhone, recCard.X + 16, recCard.X+recCard.Width/2-294)` (opens the ticket as before)
+  - `btnAnother` "Report another issue" — Y `btnAnother_1.Y + If(isPhone, 48, 0)`, X `If(isPhone, recCard.X + 16, recCard.X+recCard.Width/2-94)`. OnSelect: `Set(varSuggestedCategory, ""); Reset(txtWhat); Reset(ddCategory); Reset(rdUrgency); Reset(txtDetails); Reset(txtOnBehalf); Reset(AddMediaButton1); Set(varShot, Blank()); Set(varTicket, Blank())`
+  - `btnAnother_2` "My open tickets ↗" — Y `btnAnother_1.Y + If(isPhone, 96, 0)`, X `If(isPhone, recCard.X + 16, recCard.X+recCard.Width/2+106)` (same action as the old "My Tickets")
+
+  Verified 2026-10-22 at 390px (player in a 390px iframe): logo above title, header ≈ 110px, urgency strip reads "Can't work / Slowing me down / No rush", confirmation shows the three buttons stacked with no overlap. Studio's smallest preview is 600px, so phone checks must be done in the player (`apps.powerapps.com/play/e/<env>/a/<appid>`) or on an actual phone.
 - Hidden leftovers from the first confirmation design, keep `Visible false`: `lblDoneTitle`, `lblDoneMsg`, `lblTicketBadge`, `Icon1`.
 
 Because the card's height shrinks to the buttons on confirmation and every form control hides, the screen no longer scrolls, so Teams snaps back to the top.
