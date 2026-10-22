@@ -134,7 +134,7 @@ Live flow IDs (environment Default-26e851a0…, rebuilt 2026-10-21 after the Out
 | HD4 Ticket updated | 5f9a1671 | HD13 Setup pending-replies (off) | b747215c |
 | HD5 Planner task completed | 0cd62cf6 | HD14 Teams app intake | 4bede0e5 (under *Shared with me*; the app calls it by ID) |
 | HD6 Hourly clock | 964cba3d | HD15 Dashboard stats | bd04cabb |
-| HD7 My open tickets | 7172c1c0 | HD16 Health check v2 | (new — fill in after import; old HD16 482dc407 stays off as rollback) |
+| HD7 My open tickets | 7172c1c0 | HD16 Health check v2 | da2f43b4 (old HD16 482dc407 kept off as rollback) |
 | HD8 Daily report | 3c9907f7 | HD17 Fix ticket permissions (off) | 1a62b6b6 |
 
 **Why HD14 is not in "My flows":** HD14 was created on 2026-10-10 under Martin's own account, with IT Support added as co-owner. "My flows" only lists flows whose *primary owner* is the signed-in account, so when working as IT_Support, HD14 appears under **Shared with me** instead. It is the only flow like this; every other flow was imported as IT_Support. The Teams app calls HD14 by its ID (4bede0e5…), so a copy of HD14 imported as IT_Support is *not* used by the app — delete any such spare, or re-point the app's Send button at it in Power Apps Studio if you want HD14 owned by IT_Support like the rest.
