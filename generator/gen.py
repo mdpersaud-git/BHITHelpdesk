@@ -1854,7 +1854,13 @@ def hd16():
         ("Inbox_old", op("shared_office365", "HttpRequest", {"Method": "GET",
             "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox/messages?$filter=receivedDateTime le @{{addMinutes(utcNow(),-20)}}&$select=subject,from,receivedDateTime&$top=50"}),),
         ("InboxOk", {"type": "Compose", "runAfter": ra("Inbox_old", status=ANY), "inputs": "@equals(actions('Inbox_old')?['status'],'Succeeded')"}),
-        ("InboxCount", compose("@if(outputs('InboxOk'),length(coalesce(body('Inbox_old')?['value'],json('[]'))),-1)")),
+        # ignore Microsoft/Power Automate system mail (connection alerts, digests) - HD1 parks those, not tickets
+        ("Inbox_real", {"type": "Query", "runAfter": ra("InboxOk", status=("Succeeded", "Failed", "Skipped", "TimedOut")), "inputs": {"from": "@if(outputs('InboxOk'),coalesce(body('Inbox_old')?['value'],json('[]')),json('[]'))", "where":
+            f"@and(not(equals(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'{MBX.lower()}')),"
+            f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'.messaging.microsoft.com')),"
+            f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'@microsoft.com')),"
+            f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'@powerautomate.com')))"}}),
+        ("InboxCount", compose("@if(outputs('InboxOk'),length(body('Inbox_real')),-1)")),
         ("Review_folder", {"type": "Scope", "runAfter": ra("InboxCount", status=ANY), "actions": seq([
             ("Find_folder", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders?$filter=displayName eq 'Review'&$select=id"})),
@@ -1920,7 +1926,7 @@ def hd16():
             f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],{NL}),'')))")),
         ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "IT Ticket Systems Health",
             "item/Total": "@outputs('IssueCount')", "item/Refreshed": f"@{nowET('h:mm tt')}",
-            "item/Slot22": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
+            "item/Slot22": "@string(div(sub(ticks(utcNow()),621355968000000000),10000))",   # epoch ms, for the stale banner
             "item/Slot1": "Connections", "item/Share1": "@if(outputs('ConnBad'),100,0)",
             "item/Slot15": "@if(outputs('ConnBad'),concat('broken: ',join(body('Probe_names'),', ')),'Outlook, Teams, Planner, OneDrive, Users, SharePoint all answering')",
             "item/Slot2": "Flows", "item/Share2": "@if(not(outputs('FlowsOk')),-1,if(outputs('FlowBad'),100,0))",

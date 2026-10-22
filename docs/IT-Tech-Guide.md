@@ -66,7 +66,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 ## Monitoring (is the system healthy?)
 
-**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Seven cards, each green OK / amber CHECK / red PROBLEM / grey – (could not check), refreshed every hour at :30, around the clock, by **HD16 Health check v2**. Under the cards, one line per problem (ticket numbers only; detail is in the daily email). If HD16 itself stops, the whole panel fades and the headline pill turns grey **"STALE — health check has not run since …"** (the view compares `Slot22`, an ISO timestamp HD16 writes, with now; 90 min grace).
+**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Seven cards, each green OK / amber CHECK / red PROBLEM / grey – (could not check), refreshed every hour at :30, around the clock, by **HD16 Health check v2**. Under the cards, one line per problem (ticket numbers only; detail is in the daily email). If HD16 itself stops, the whole panel fades and the headline pill turns grey **"STALE — health check has not run since …"** (the view compares `Slot22`, the time of the check as epoch milliseconds, with now; 90 min grace).
 
 | Card | What it checks | Red means |
 |---|---|---|
@@ -74,7 +74,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 | Flows | Power Automate Management "List My Flows": every expected flow (HD1–HD9, HD11, HD12, HD15, HD16 v2) is **on, exactly once**. HD13/HD17 (run-once) are not expected on; HD14 is owned by Martin's account so it is not visible to this check. | "HDx is off or missing" / "HDx has 2 copies on" — turn the right one on, delete the duplicate |
 | New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
 | Updates notified (HD4) | No ticket whose Status differs from LastNotifiedStatus for more than 30 min (the requester was never told) | HD4 is not running — check its run history and the SharePoint connection |
-| Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review); amber if mail landed in **Review** in the last 24 h (system mail ignored) | HD1 is not ticketing email |
+| Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review; Microsoft/Power Automate system mail ignored); amber if mail landed in **Review** in the last 24 h (system mail ignored) | HD1 is not ticketing email |
 | Clock & auto-close (HD6) | An open ticket has been touched in the last 3 h (checked 11:00–21:59 only, since HD6 runs 8–21); nothing resolved more than 72 h ago is still "Resolved Pending Confirmation" | HD6 stopped — SLA clock, reminders and auto-close are all off |
 | Dashboard data (HD15) | The stats rows behind the charts were refreshed in the last 30 min (checked 7am–9pm) | HD15 stopped — the charts below are stale |
 
@@ -88,7 +88,7 @@ Behind the panel, three layers of alerts all go to Martin:
 
 If an alert names a flow run, open the link: the failed step is highlighted in red with the full error.
 
-The panel's rendering is the JSON view formatting on the **Live overview** list's *Chart - Health* view (filtered to item 14). The source of truth is `dashboard/health-view.json` in the repo: paste it into the view via *Format current view → Advanced mode* whenever it changes. Column map: card n uses `Slot n` (name), `Slot n+14` (description) and `Share n` (0 OK / 50 amber / 100 red / −1 grey); `Total` = issue count, `Refreshed` = time shown, `Slot22` = ISO time of the check, `Grad` = the problem band, `Slot10`/`Slot11` = last HD3/HD4 self-reported problem and its time.
+The panel's rendering is the JSON view formatting on the **Live overview** list's *Chart - Health* view (filtered to item 14). The source of truth is `dashboard/health-view.json` in the repo: paste it into the view via *Format current view → Advanced mode* whenever it changes. Column map: card n uses `Slot n` (name), `Slot n+14` (description) and `Share n` (0 OK / 50 amber / 100 red / −1 grey); `Total` = issue count, `Refreshed` = time shown, `Slot22` = time of the check in epoch ms, `Grad` = the problem band, `Slot10`/`Slot11` = last HD3/HD4 self-reported problem and its time.
 
 ## Reply to a closed ticket
 
