@@ -4,3 +4,5 @@
 - **Update the guide in the same change.** Any edit to the app, a flow, the category list, or the notifications must land in the relevant .md in the same commit.
 - Don't replace a documented formula with a "simpler" one (e.g. `ddCategory.Default` must stay the live keyword formula in `app/ddCategory-Default.fx`).
 - Category names must match in three places: the Tickets list choice column, `ddCategory.Items`, and `generator/gen.py`.
+- The dashboard's health panel formatting lives in `dashboard/health-view.json`; change it there and paste into the SharePoint view, never only in SharePoint.
+- Power Automate expressions: never `createArray()` with no arguments (use `json('[]')`); never trust `result('Scope')` for nested steps — list leaf actions in `self_check(..., leaf=...)`.

@@ -49,6 +49,7 @@ APIS = {
     'shared_microsoftforms': ('microsoftforms', 'Microsoft Forms', 'shared-forms-placeholder'),
     'shared_conversionservice': ('conversionservice', 'Content Conversion', 'shared-conversion-placeholder'),
     'shared_onedriveforbusiness': ('onedriveforbusiness', 'OneDrive for Business', 'shared-onedrive-placeholder'),
+    'shared_flowmanagement': ('flowmanagement', 'Power Automate Management', 'shared-flowmgmt-placeholder'),
 }
 
 # ---------- statuses ----------
@@ -144,7 +145,17 @@ def team_msgs(prefix, html, team):
 RUN_LINK = ("https://make.powerautomate.com/environments/@{workflow()?['tags']?['environmentName']}"
             "/flows/@{workflow()?['name']}/runs/@{workflow()?['run']?['name']}")
 
-def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=None):
+def leaf_item(x):
+    """A {name,status,error:{message}} record for one named action, built as a JSON string so it can be
+    unioned with result() output. Quotes, backslashes and newlines in the error text are flattened so the
+    JSON stays valid; the text is cut at 160 characters."""
+    msg = "coalesce(actions('%s')?['error']?['message'],'')" % x
+    safe = ("replace(replace(replace(substring(%s,0,min(length(%s),160)),'\"',''''),'\\',' '),decodeUriComponent('%%0A'),' ')"
+            % (msg, msg))
+    return ("json(concat('{\"name\":\"%s\",\"status\":\"',coalesce(actions('%s')?['status'],'Skipped'),"
+            "'\",\"error\":{\"message\":\"',%s,'\"}}'))" % (x, x, safe))
+
+def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=None, leaf=()):
     """Monitoring: look at the results of the listed scoped actions (Scope / If / Foreach) and, if any top-level
     action in them did not succeed, email + Teams-message Martin with the action names, error text and a link to
     the run. `extra` is an optional expression returning additional {name,status} items (synthetic checks).
@@ -152,6 +163,10 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
     src = "union(" + ",".join(f"result('{s}')" for s in scoped) + ")"
     if extra:
         src = f"union({src},{extra})"
+    # result() only sees the top level of a scope; named leaf actions (an email inside an If inside a Scope) are
+    # read directly, so a nested failure is reported too. A leaf that never ran reads as Skipped.
+    if leaf:
+        src = f"union({src},createArray(" + ",".join(leaf_item(x) for x in leaf) + "))"
     lines = f"@{{join(body('{prefix}_lines'),'')}}"
     html = (f"<p>{intro}</p><ul>{lines}</ul>"
             f"<p><a href=\"{RUN_LINK}\">Open this flow run</a></p>")
@@ -532,11 +547,11 @@ def hd1():
         # Read the whole (small) list and compare in an expression: no OData quoting, case-insensitive.
         ("Get_external_senders", sp("GetItems", {"table": EXTERNAL_SENDERS, "$top": 500})),
         ("Allowed_senders", {"type": "Select", "runAfter": ra("Get_external_senders", status=("Succeeded", "Failed")),
-                             "inputs": {"from": "@coalesce(body('Get_external_senders')?['value'],createArray())",
+                             "inputs": {"from": "@coalesce(body('Get_external_senders')?['value'],json('[]'))",
                                         "select": "@toLower(trim(coalesce(item()?['Title'],'')))"}}),
         ("IsAllowedExternal", compose("@or(contains(body('Allowed_senders'),outputs('Sender')),contains(body('Allowed_senders'),outputs('SenderDomain')))")),
         # skip inline images (signature logos); only real attachments go on the ticket
-        ("Real_attachments", {"type": "Query", "inputs": {"from": "@coalesce(triggerOutputs()?['body/attachments'],createArray())",
+        ("Real_attachments", {"type": "Query", "inputs": {"from": "@coalesce(triggerOutputs()?['body/attachments'],json('[]'))",
                                                           "where": "@not(equals(item()?['isInline'],true))"}}),
         ("Is_it_a_real_email_from_a_known_sender", cond(
             f"@and(or(outputs('IsInternal'),outputs('IsAllowedExternal')),not(equals(outputs('Sender'),toLower('{MBX}'))),"
@@ -695,7 +710,7 @@ def hd3():
     actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
         f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",
-        f"concat('IT-',{ID},' (created)')", extra=no_channel, after=ra("Tell_IT_new_ticket", status=ANY3)))
+        f"concat('IT-',{ID},' (created)')", extra=no_channel, leaf=("Send_confirmation_email", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
@@ -882,7 +897,8 @@ def hd4():
         f"[Help desk health] Notification problem on ticket update IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
-        f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL)))
+        f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
+        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1750,24 +1766,74 @@ def tech_sla():
     acts.append(("Update_tech_sla", sp("PatchItem", {"table": DASH, **item})))
     return acts
 
-# ---------- HD16 Health check ----------
+# ---------- HD16 Health check v2 ----------
+# Expected live flows (display name as listed by Power Automate Management). HD13/HD17 are run-once (off);
+# HD14 is owned by Martin's account so "List My Flows" (as IT_Support) does not return it.
+EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "HD4 Ticket updated",
+                  "HD5 Planner task completed", "HD6 Hourly clock", "HD7 My open tickets", "HD8 Daily report",
+                  "HD9 Card actions", "HD11 Tech thread replies", "HD12 Requester replies in Teams",
+                  "HD15 Dashboard stats", "HD16 Health check v2"]
+PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support account)", "Probe_Teams": "Teams",
+                "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
+                "Probe_Flows": "Power Automate Management"}
+
 def hd16():
-    """Runs hourly 7am-9pm. Looks at the data the other flows leave behind, updates the "System health" panel on
-    the IT dashboard every run, emails Martin a report once a day (9:30), and Teams-messages him whenever the
-    number of issues changes (so a new problem pings once, not every hour).
-      1. tickets created in the last 24h that HD3 did not finish (no Planner task / channel post / created line)
-      2. HD6 heartbeat: open tickets that the hourly clock has not touched in 3 hours
-      3. resolved tickets that should have auto-closed (resolved more than 72h ago)
-      4. emails left in the mailbox's Review folder in the last 24h (not ticketed) - attention, not a failure
-      5. notification problems reported by HD3/HD4 self-checks in the last 24h (they write to the dashboard row)
-    Hard flow failures are covered separately by Power Automate's own failure emails to the flow owner."""
+    """Runs hourly, 24/7. Seven cards on the IT dashboard "System health" panel, a one-line-per-problem band under
+    them, an ISO timestamp the dashboard uses to grey the panel out when this flow stops, a daily 9:30 email and a
+    Teams message whenever the issue count changes (alerts only 7am-9pm; overnight problems wait on the panel).
+      1 Connections   read-only probe through every connector (Forms has no read action, so it is not probed)
+      2 Flows         every expected flow is on exactly once (Power Automate Management, List My Flows)
+      3 New tickets   tickets created in the last 24h that HD3 did not finish
+      4 Updates       tickets whose status changed >30 min ago but the requester was never told (HD4 dead)
+      5 Intake        mail sitting in the Inbox >20 min (HD1 dead; red) / mail parked in Review in 24h (amber)
+      6 Clock         HD6 heartbeat (nothing touched in 3h) and resolved tickets not auto-closed after 72h
+      7 Dashboard     DashStats row refreshed in the last 30 min (HD15 dead), checked 7am-9pm only"""
     it = lambda k: f"item()?['{k}']"
     li = lambda body: f"concat('<li>',{body},'</li>')"
     working = " or ".join(f"Status eq '{s}'" for s in WORKING)
     ANY = ("Succeeded", "Failed", "Skipped", "TimedOut")
     prev = "body('Previous')"
+    NL = "decodeUriComponent('%0A')"
+    hourET = f"int({nowET('HH')})"
+    office = f"and(greaterOrEquals({hourET},7),less({hourET},21))"
+
+    # --- 1. connection probes: all read-only, run in parallel inside one scope ---
+    probes = {
+        "Probe_Outlook": op("shared_office365", "HttpRequest", {"Method": "GET",
+            "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox?$select=id"}),
+        "Probe_Teams": op("shared_teams", "GetChannelsForGroup", {"groupId": GROUP}),
+        "Probe_Teams_IT": op("shared_teams_1", "GetAllTeams", {}),
+        "Probe_Planner": op("shared_planner", "ListBuckets_V3", {"groupId": GROUP, "id": PLAN}),
+        "Probe_Users": op("shared_office365users", "UserProfile_V2", {"id": ME}),
+        "Probe_OneDrive": op("shared_onedriveforbusiness", "ListRootFolder", {}),
+        "Probe_Flows": op("shared_flowmanagement", "ListMyFlows", {"environmentName": "@workflow()?['tags']?['environmentName']"}),
+    }
+    label_expr = "item()?['name']"
+    for k, v in PROBE_LABELS.items():
+        label_expr = f"replace({label_expr},'{k}','{v}')"
+
+    # --- 2. flows: "<displayName>=<state>;..." then count how many times each expected flow is Started ---
+    flow_terms = []
+    for name in EXPECTED_FLOWS:
+        c = f"sub(length(split(outputs('FlowStr'),'{name}=Started')),1)"
+        flow_terms.append(f"if(equals({c},1),'',concat('{name}',if(equals({c},0),' is off or missing; ',concat(' has ',string({c}),' copies on; '))))")
+    flow_problems = "concat(" + ",".join(flow_terms) + ")"
+
     acts = seq([
         ("Previous", sp("GetItem", {"table": DASH, "id": DASH_HEALTH})),
+        ("Probes", {"type": "Scope", "runAfter": ra("Previous", status=ANY), "actions": probes}),
+        ("Probe_failed", {"type": "Query", "runAfter": ra("Probes", status=ANY), "inputs": {"from": "@result('Probes')",
+            "where": "@not(equals(item()?['status'],'Succeeded'))"}}),
+        ("Probe_names", {"type": "Select", "inputs": {"from": "@body('Probe_failed')", "select": "@" + label_expr}}),
+        ("ConnBad", compose("@greater(length(body('Probe_failed')),0)")),
+        ("FlowsOk", compose("@equals(actions('Probe_Flows')?['status'],'Succeeded')")),
+        ("FlowList", {"type": "Select", "inputs": {"from": "@if(outputs('FlowsOk'),body('Probe_Flows')?['value'],json('[]'))",
+            "select": "@concat(item()?['properties']?['displayName'],'=',item()?['properties']?['state'])"}}),
+        ("FlowStr", compose("@join(body('FlowList'),';')")),
+        ("FlowProblems", compose("@if(outputs('FlowsOk'),trim(" + flow_problems + "),'')")),
+        ("FlowBad", compose("@and(outputs('FlowsOk'),greater(length(outputs('FlowProblems')),0))")),
+
+        # --- 3. new tickets set up ---
         ("Recent", sp("GetItems", {"$filter": "Created ge '@{addHours(utcNow(),-24)}' and Created lt '@{addMinutes(utcNow(),-20)}'", "$top": 500})),
         ("Incomplete", {"type": "Query", "inputs": {"from": "@body('Recent')?['value']", "where":
             f"@or(empty(coalesce({it('PlannerTaskId')},'')),empty(coalesce({it('ChannelMessageId')},'')),not(contains(coalesce({it('Conversation')},''),'Ticket created')))"}}),
@@ -1777,24 +1843,26 @@ def hd16():
             f"if(empty(coalesce({it('ChannelMessageId')},'')),'no channel post; ',''),"
             f"if(not(contains(coalesce({it('Conversation')},''),'Ticket created')),'HD3 did not finish; ',''),')'")}}),
         ("Incomplete_ids", {"type": "Select", "inputs": {"from": "@body('Incomplete')", "select": f"@concat('IT-',{it('ID')})"}}),
-        ("Working", sp("GetItems", {"$filter": f"({working}) and Created lt '@{{addMinutes(utcNow(),-90)}}'", "$top": 500})),
-        ("Touched", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
-            "where": f"@greater(ticks({it('Modified')}),ticks(addHours(utcNow(),-3)))"}}),
-        # HD6 runs 8:00-21:00; before its first run of the day "nothing touched in 3 h" is just overnight, not a fault
-        ("ClockStalled", compose(f"@and(greaterOrEquals(int({nowET('HH')}),8),greater(length(body('Working')?['value']),0),equals(length(body('Touched')),0))")),
-        ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
-        ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
-            "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
-        ("StuckResolved_ids", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']", "select": f"@concat('IT-',{it('ID')})"}}),
-        ("Review_folder", {"type": "Scope", "runAfter": ra("StuckResolved_ids", status=ANY), "actions": seq([
+
+        # --- 4. updates notified (HD4 alive): status differs from LastNotifiedStatus for more than 30 min ---
+        ("Changed", sp("GetItems", {"$filter": "Modified ge '@{addHours(utcNow(),-48)}' and Modified lt '@{addMinutes(utcNow(),-30)}'", "$top": 500})),
+        ("Unnotified", {"type": "Query", "inputs": {"from": "@body('Changed')?['value']", "where":
+            f"@not(equals(coalesce({it('Status')}?['Value'],'Open'),coalesce({it('LastNotifiedStatus')},'Open')))"}}),
+        ("Unnotified_ids", {"type": "Select", "inputs": {"from": "@body('Unnotified')", "select": f"@concat('IT-',{it('ID')})"}}),
+
+        # --- 5. intake: Inbox mail HD1 has not picked up; Review folder for attention ---
+        ("Inbox_old", op("shared_office365", "HttpRequest", {"Method": "GET",
+            "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox/messages?$filter=receivedDateTime le @{{addMinutes(utcNow(),-20)}}&$select=subject,from,receivedDateTime&$top=50"}),),
+        ("InboxOk", {"type": "Compose", "runAfter": ra("Inbox_old", status=ANY), "inputs": "@equals(actions('Inbox_old')?['status'],'Succeeded')"}),
+        ("InboxCount", compose("@if(outputs('InboxOk'),length(coalesce(body('Inbox_old')?['value'],json('[]'))),-1)")),
+        ("Review_folder", {"type": "Scope", "runAfter": ra("InboxCount", status=ANY), "actions": seq([
             ("Find_folder", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders?$filter=displayName eq 'Review'&$select=id"})),
             ("Find_subfolder", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/inbox/childFolders?$filter=displayName eq 'Review'&$select=id"})),
-            ("ReviewId", compose("@first(union(coalesce(body('Find_folder')?['value'],createArray()),coalesce(body('Find_subfolder')?['value'],createArray())))?['id']")),
+            ("ReviewId", compose("@first(union(coalesce(body('Find_folder')?['value'],json('[]')),coalesce(body('Find_subfolder')?['value'],json('[]'))))?['id']")),
             ("Review_mail", op("shared_office365", "HttpRequest", {"Method": "GET",
                 "Uri": f"https://graph.microsoft.com/v1.0/users/{MBX}/mailFolders/@{{outputs('ReviewId')}}/messages?$filter=receivedDateTime ge @{{addHours(utcNow(),-24)}}&$select=subject,from,receivedDateTime&$top=50&$orderby=receivedDateTime desc"})),
-            # ignore the help desk's own notifications (IT Support as requester) and Microsoft system digests
             ("Review_real", {"type": "Query", "inputs": {"from": "@body('Review_mail')?['value']", "where":
                 f"@and(not(equals(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'{MBX.lower()}')),"
                 f"not(endsWith(toLower(coalesce({it('from')}?['emailAddress']?['address'],'')),'.messaging.microsoft.com')),"
@@ -1809,50 +1877,94 @@ def hd16():
             "@if(outputs('ReviewOk'),"
             "if(greater(outputs('ReviewCount'),0),concat('<ul>',join(body('Review_lines'),''),'</ul>'),'<p>None.</p>'),"
             "'<p>Could not read the Review folder (check the HD16 run).</p>')")),
-        # notification problems flagged by HD3/HD4 (they stamp Slot11 with the UTC time): red for 24h, then clear
+        ("IntakeState", compose("@if(greater(outputs('InboxCount'),0),100,if(not(outputs('InboxOk')),-1,if(greater(outputs('ReviewCount'),0),50,0)))")),
+
+        # --- 6. clock and auto-close (HD6) ---
+        ("Working", sp("GetItems", {"$filter": f"({working}) and Created lt '@{{addMinutes(utcNow(),-90)}}'", "$top": 500})),
+        ("Touched", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
+            "where": f"@greater(ticks({it('Modified')}),ticks(addHours(utcNow(),-3)))"}}),
+        # HD6 runs 8:00-21:00; outside that, "nothing touched in 3 h" is just the clock being off for the night
+        ("ClockStalled", compose(f"@and(greaterOrEquals({hourET},11),less({hourET},22),greater(length(body('Working')?['value']),0),equals(length(body('Touched')),0))")),
+        ("StuckResolved", sp("GetItems", {"$filter": f"Status eq '{S_RES}' and ResolvedOn lt '@{{addHours(utcNow(),-72)}}'", "$top": 100})),
+        ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
+            "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
+        ("StuckResolved_ids", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']", "select": f"@concat('IT-',{it('ID')})"}}),
+        ("ClockBad", compose("@or(outputs('ClockStalled'),greater(length(body('StuckResolved')?['value']),0))")),
+
+        # --- 7. dashboard data (HD15 alive): newest Modified on the stats rows, business hours only ---
+        ("Dash_rows", sp("GetItems", {"table": DASH, "$filter": f"ID ne {DASH_HEALTH}", "$orderby": "Modified desc", "$top": 1})),
+        ("DashStale", compose(f"@and({office},greater(length(body('Dash_rows')?['value']),0),less(ticks(first(body('Dash_rows')?['value'])?['Modified']),ticks(addMinutes(utcNow(),-30))))")),
+
+        # notification problems flagged by HD3/HD4 (they stamp Slot11 with the UTC time): shown for 24h
         ("NotifyRecent", compose(f"@greater(ticks(if(empty(coalesce({prev}?['Slot11'],'')),'2000-01-01T00:00:00Z',{prev}?['Slot11'])),ticks(addHours(utcNow(),-24)))")),
-        ("IssueCount", compose("@add(add(add(length(body('Incomplete')),length(body('StuckResolved')?['value'])),if(outputs('ClockStalled'),1,0)),if(outputs('NotifyRecent'),1,0))")),
+
+        ("IssueCount", compose(
+            "@add(add(add(add(add(add(add("
+            "if(outputs('ConnBad'),1,0),if(outputs('FlowBad'),1,0)),"
+            "if(greater(length(body('Incomplete')),0),1,0)),"
+            "if(greater(length(body('Unnotified')),0),1,0)),"
+            "if(greater(outputs('InboxCount'),0),1,0)),"
+            "if(outputs('ClockBad'),1,0)),"
+            "if(outputs('DashStale'),1,0)),"
+            "if(outputs('NotifyRecent'),1,0))")),
         ("Details", compose(
             "@trim(concat("
-            "if(greater(length(body('Incomplete')),0),concat('Incomplete setup (no Planner task / channel post): ',join(body('Incomplete_ids'),', '),' — resubmit their HD3 runs or close them.',decodeUriComponent('%0A')),''),"
-            "if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours — check HD6 run history.',decodeUriComponent('%0A')),''),"
-            "if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_ids'),', '),decodeUriComponent('%0A')),'')))")),
+            f"if(outputs('ConnBad'),concat('Connections broken: ',join(body('Probe_names'),', '),' — Power Automate › Connections › fix or recreate (see Tech Guide).',{NL}),''),"
+            f"if(outputs('FlowBad'),concat('Flows: ',outputs('FlowProblems'),{NL}),''),"
+            f"if(greater(length(body('Incomplete')),0),concat('Incomplete setup (no Planner task / channel post): ',join(body('Incomplete_ids'),', '),' — check the HD3 runs.',{NL}),''),"
+            f"if(greater(length(body('Unnotified')),0),concat('Status changed but requester not told: ',join(body('Unnotified_ids'),', '),' — check HD4.',{NL}),''),"
+            f"if(greater(outputs('InboxCount'),0),concat(string(outputs('InboxCount')),' email(s) waiting in the IT Support inbox for over 20 min — HD1 is not ticketing them.',{NL}),''),"
+            f"if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours — check HD6.',{NL}),''),"
+            f"if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_ids'),', '),{NL}),''),"
+            f"if(outputs('DashStale'),concat('Dashboard charts not refreshed for 30 min — check HD15.',{NL}),''),"
+            f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],{NL}),'')))")),
         ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "IT Ticket Systems Health",
             "item/Total": "@outputs('IssueCount')", "item/Refreshed": f"@{nowET('h:mm tt')}",
-            "item/Slot1": "New tickets set up", "item/Share1": "@if(greater(length(body('Incomplete')),0),100,0)",
-            "item/Slot6": "@concat(length(body('Recent')?['value']),' created in 24h, ',length(body('Incomplete')),' incomplete')",
-            "item/Slot2": "Hourly clock (HD6)", "item/Share2": "@if(outputs('ClockStalled'),100,0)",
-            "item/Slot7": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(less(int({nowET('HH')}),8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked')))",
-            "item/Slot3": "Auto-close (HD6)", "item/Share3": "@if(greater(length(body('StuckResolved')?['value']),0),100,0)",
-            "item/Slot8": "@if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),'resolved tickets closing on time')",
-            "item/Slot4": "Emails not ticketed", "item/Share4": "@if(outputs('ReviewOk'),if(greater(outputs('ReviewCount'),0),50,0),-1)",
-            "item/Slot9": "@if(outputs('ReviewOk'),concat(outputs('ReviewCount'),' in the Review folder, last 24 h'),'could not read the Review folder')",
-            "item/Slot5": "Notifications (HD3/HD4)", "item/Share5": "@if(outputs('NotifyRecent'),100,0)",
+            "item/Slot22": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
+            "item/Slot1": "Connections", "item/Share1": "@if(outputs('ConnBad'),100,0)",
+            "item/Slot15": "@if(outputs('ConnBad'),concat('broken: ',join(body('Probe_names'),', ')),'Outlook, Teams, Planner, OneDrive, Users, SharePoint all answering')",
+            "item/Slot2": "Flows", "item/Share2": "@if(not(outputs('FlowsOk')),-1,if(outputs('FlowBad'),100,0))",
+            "item/Slot16": f"@if(not(outputs('FlowsOk')),'could not list flows',if(outputs('FlowBad'),outputs('FlowProblems'),'{len(EXPECTED_FLOWS)} flows on, one copy each'))",
+            "item/Slot3": "New tickets set up", "item/Share3": "@if(greater(length(body('Incomplete')),0),100,0)",
+            "item/Slot17": "@concat(length(body('Recent')?['value']),' created in 24h, ',length(body('Incomplete')),' incomplete')",
+            "item/Slot4": "Updates notified (HD4)", "item/Share4": "@if(greater(length(body('Unnotified')),0),100,0)",
+            "item/Slot18": "@if(greater(length(body('Unnotified')),0),concat(length(body('Unnotified')),' ticket(s) changed, requester not told'),'every status change was sent')",
+            "item/Slot5": "Email intake (HD1)", "item/Share5": "@outputs('IntakeState')",
+            "item/Slot19": "@if(greater(outputs('InboxCount'),0),concat(outputs('InboxCount'),' email(s) stuck in the inbox'),if(not(outputs('InboxOk')),'could not read the inbox',if(greater(outputs('ReviewCount'),0),concat(outputs('ReviewCount'),' in the Review folder, last 24 h'),'inbox clear; nothing in Review')))",
+            "item/Slot6": "Clock & auto-close (HD6)", "item/Share6": "@if(outputs('ClockBad'),100,0)",
+            "item/Slot20": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),if(less({hourET},8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked'))))",
+            "item/Slot7": "Dashboard data (HD15)", "item/Share7": "@if(outputs('DashStale'),100,0)",
+            "item/Slot21": "@if(outputs('DashStale'),'charts not refreshed for 30 min',if(greater(length(body('Dash_rows')?['value']),0),concat('refreshed ',formatDateTime(convertTimeZone(first(body('Dash_rows')?['value'])?['Modified'],'UTC','" + TZ + "'),'h:mm tt')),'no data yet'))",
             "item/Slot10": f"@if(empty(coalesce({prev}?['Slot10'],'')),'no problems reported',{prev}?['Slot10'])",
             "item/Grad": "@outputs('Details')"})),
         ("Report", compose(
             "@concat("
             "'<h3>Help desk health — ',if(equals(outputs('IssueCount'),0),'all clear','PROBLEMS FOUND'),'</h3>',"
+            "'<p><b>Connections:</b> ',if(outputs('ConnBad'),concat('<span style=\"color:#b00\">broken: ',join(body('Probe_names'),', '),'</span>'),'all answering'),'</p>',"
+            "'<p><b>Flows:</b> ',if(not(outputs('FlowsOk')),'could not list flows',if(outputs('FlowBad'),concat('<span style=\"color:#b00\">',outputs('FlowProblems'),'</span>'),'all on, one copy each')),'</p>',"
             "'<p><b>New tickets, last 24h:</b> ',length(body('Recent')?['value']),' created; ',length(body('Incomplete')),' with incomplete setup.</p>',"
             "if(greater(length(body('Incomplete')),0),concat('<ul>',join(body('Incomplete_lines'),''),'</ul>'),''),"
+            "'<p><b>Updates notified (HD4):</b> ',if(greater(length(body('Unnotified')),0),concat('<span style=\"color:#b00\">not sent for ',join(body('Unnotified_ids'),', '),'</span>'),'OK'),'</p>',"
+            "'<p><b>Email intake (HD1):</b> ',if(greater(outputs('InboxCount'),0),concat('<span style=\"color:#b00\">',string(outputs('InboxCount')),' email(s) waiting in the inbox</span>'),if(outputs('InboxOk'),'inbox clear','could not read the inbox')),'</p>',"
             "'<p><b>Hourly clock (HD6):</b> ',if(outputs('ClockStalled'),'<span style=\"color:#b00\">NOT RUNNING — no open ticket has been updated in 3 hours</span>',"
             "concat('OK (',length(body('Working')?['value']),' open tickets being tracked)')),'</p>',"
             "'<p><b>Auto-close (HD6):</b> ',if(greater(length(body('StuckResolved')?['value']),0),"
             "concat('<span style=\"color:#b00\">',length(body('StuckResolved')?['value']),' resolved ticket(s) past 72h still not closed</span><ul>',join(body('StuckResolved_lines'),''),'</ul>'),'OK'),'</p>',"
-            f"'<p><b>Notifications (HD3/HD4):</b> ',if(outputs('NotifyRecent'),concat('<span style=\"color:#b00\">',{prev}?['Slot10'],'</span>'),'no problems reported in the last 24h'),'</p>',"
-            "'<p><b>Emails not ticketed (Review folder, last 24h, excluding system mail):</b></p>',outputs('ReviewNote'),"
-            f"'<p><a href=\"{SITE}/SitePages/IT-Dashboard.aspx\">Open the IT dashboard</a></p>',"
-            "'<p style=\"color:#888;font-size:12px\">Notification failures on individual tickets are reported immediately by HD3/HD4; hard flow failures by Power Automate failure emails to IT Support.</p>')")),
-        ("Daily_email", cond(f"@equals(int({nowET('HH')}),9)", {
+            "'<p><b>Dashboard data (HD15):</b> ',if(outputs('DashStale'),'<span style=\"color:#b00\">stale for 30 min</span>','OK'),'</p>',"
+            f"'<p><b>Notifications (HD3/HD4 self-checks):</b> ',if(outputs('NotifyRecent'),concat('<span style=\"color:#b00\">',{prev}?['Slot10'],'</span>'),'no problems reported in the last 24h'),'</p>',"
+            "'<p><b>Emails parked in Review (last 24h, excluding system mail):</b></p>',outputs('ReviewNote'),"
+            f"'<p><a href=\"{SITE}/SitePages/IT-Dashboard.aspx\">Open the IT dashboard</a></p>')")),
+        ("Daily_email", cond(f"@equals({hourET},9)", {
             "Email_report": mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear',concat('PROBLEMS: ',string(outputs('IssueCount')))))}",
                                  "@{outputs('Report')}")})),
-        ("Teams_if_changed", {**cond(f"@and(greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
+        ("Teams_if_changed", {**cond(f"@and({office},greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
             {"Tell_Martin": {"type": "Scope", "runAfter": {}, "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")}}),
             "runAfter": ra("Daily_email", status=ANY)}),
     ])
-    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
-            "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(7, 22)], "minutes": [30]}}}}
-    return "HD16 Health check", trig, acts
+    acts["Inbox_old"]["runAfter"] = ra("Unnotified_ids", status=ANY)
+    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Hour", "interval": 1, "timeZone": TZ,
+            "schedule": {"minutes": [30]}}}}
+    return "HD16 Health check v2", trig, acts
 
 # ---------- packaging ----------
 def used_apis(obj, acc):

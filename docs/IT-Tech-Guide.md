@@ -66,23 +66,29 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 ## Monitoring (is the system healthy?)
 
-**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Five cards, each green OK / amber CHECK / red PROBLEM, refreshed every hour 7am–9pm by HD16. Under the cards, a one-line-per-problem summary (ticket numbers only; the detail is in the daily health email):
+**Look first at the IT Dashboard → "System health" panel** (top of https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2/SitePages/IT-Dashboard.aspx). Seven cards, each green OK / amber CHECK / red PROBLEM / grey – (could not check), refreshed every hour at :30, around the clock, by **HD16 Health check v2**. Under the cards, one line per problem (ticket numbers only; detail is in the daily email). If HD16 itself stops, the whole panel fades and the headline pill turns grey **"STALE — health check has not run since …"** (the view compares `Slot22`, an ISO timestamp HD16 writes, with now; 90 min grace).
 
 | Card | What it checks | Red means |
 |---|---|---|
+| Connections | A read-only call through every connector each hour: Outlook (mailbox), Teams (channels), Teams as IT Support (joined teams), Planner (buckets), Office 365 Users, OneDrive, Power Automate Management; SharePoint is exercised by the ticket queries. Microsoft Forms has no read action and is **not** probed. | Names the broken connection — Power Automate › Connections › Reconnect, or recreate it (see "Emails stop but Teams messages still arrive" below) |
+| Flows | Power Automate Management "List My Flows": every expected flow (HD1–HD9, HD11, HD12, HD15, HD16 v2) is **on, exactly once**. HD13/HD17 (run-once) are not expected on; HD14 is owned by Martin's account so it is not visible to this check. | "HDx is off or missing" / "HDx has 2 copies on" — turn the right one on, delete the duplicate |
 | New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
-| Hourly clock (HD6) | At least one open ticket has been touched in the last 3 h | HD6 stopped — SLA clock, reminders and auto-close are all off |
-| Auto-close (HD6) | No ticket resolved more than 72 h ago is still "Resolved Pending Confirmation" | Auto-close isn't firing |
-| Emails not ticketed | Mail in the mailbox's **Review** folder in the last 24 h, ignoring the help desk's own notifications and Microsoft system mail (amber, not red — it's a "go look" not a failure) | — |
-| Notifications (HD3/HD4) | HD3/HD4 reported a failed requester/tech notification in the last 24 h | A requester or tech did not get a message — the card names the ticket and how many steps failed; the alert email/Teams message from HD3/HD4 has the step names and error text |
+| Updates notified (HD4) | No ticket whose Status differs from LastNotifiedStatus for more than 30 min (the requester was never told) | HD4 is not running — check its run history and the SharePoint connection |
+| Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review); amber if mail landed in **Review** in the last 24 h (system mail ignored) | HD1 is not ticketing email |
+| Clock & auto-close (HD6) | An open ticket has been touched in the last 3 h (checked 11:00–21:59 only, since HD6 runs 8–21); nothing resolved more than 72 h ago is still "Resolved Pending Confirmation" | HD6 stopped — SLA clock, reminders and auto-close are all off |
+| Dashboard data (HD15) | The stats rows behind the charts were refreshed in the last 30 min (checked 7am–9pm) | HD15 stopped — the charts below are stale |
+
+Problems reported by the HD3/HD4 self-checks in the last 24 h are added to the band under the cards (the step name is in the alert email).
 
 Behind the panel, three layers of alerts all go to Martin:
 
-1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run: requester email, requester Teams message, Planner task, channel post, tech ping. If any did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the failed step, the error text and a link to the flow run, and the Notifications card turns red for 24 h. The ticket itself is still created/updated — only the notification is reported.
-2. **HD16 health check, hourly.** Updates the panel every run; emails Martin a report once a day at 9:30 am (subject "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n"); Teams-messages him whenever the issue count changes, so a new problem pings once rather than every hour.
+1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run — the named notification steps directly (confirmation email, confirmation chat, Planner task, channel post; status email, status chat, note email/chat, new-tech chat, Planner move), not just the scope summaries, so a failure nested inside a condition is caught. If any did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the failed step, the error text and a link to the flow run. The ticket itself is still created/updated — only the notification is reported.
+2. **HD16 health check, hourly, 24/7.** Updates the panel every run; emails Martin a report once a day at 9:30 am (subject "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n"); Teams-messages him whenever the issue count changes, **between 7 am and 9 pm only** — an overnight problem waits on the panel and is in the 7:30 am message.
 3. **Hard flow failures.** Power Automate emails the flow owner (IT Support) whenever a run fails outright, plus a weekly digest. To receive these as yourself, open each flow → ⋯ → *Flow failure alerts*.
 
 If an alert names a flow run, open the link: the failed step is highlighted in red with the full error.
+
+The panel's rendering is the JSON view formatting on the **Live overview** list's *Chart - Health* view (filtered to item 14). The source of truth is `dashboard/health-view.json` in the repo: paste it into the view via *Format current view → Advanced mode* whenever it changes. Column map: card n uses `Slot n` (name), `Slot n+14` (description) and `Share n` (0 OK / 50 amber / 100 red / −1 grey); `Total` = issue count, `Refreshed` = time shown, `Slot22` = ISO time of the check, `Grad` = the problem band, `Slot10`/`Slot11` = last HD3/HD4 self-reported problem and its time.
 
 ## Reply to a closed ticket
 
@@ -128,7 +134,7 @@ Live flow IDs (environment Default-26e851a0…, rebuilt 2026-10-21 after the Out
 | HD4 Ticket updated | 5f9a1671 | HD13 Setup pending-replies (off) | b747215c |
 | HD5 Planner task completed | 0cd62cf6 | HD14 Teams app intake | 4bede0e5 (under *Shared with me*; the app calls it by ID) |
 | HD6 Hourly clock | 964cba3d | HD15 Dashboard stats | bd04cabb |
-| HD7 My open tickets | 7172c1c0 | HD16 Health check | 482dc407 |
+| HD7 My open tickets | 7172c1c0 | HD16 Health check v2 | (new — fill in after import; old HD16 482dc407 stays off as rollback) |
 | HD8 Daily report | 3c9907f7 | HD17 Fix ticket permissions (off) | 1a62b6b6 |
 
 **Why HD14 is not in "My flows":** HD14 was created on 2026-10-10 under Martin's own account, with IT Support added as co-owner. "My flows" only lists flows whose *primary owner* is the signed-in account, so when working as IT_Support, HD14 appears under **Shared with me** instead. It is the only flow like this; every other flow was imported as IT_Support. The Teams app calls HD14 by its ID (4bede0e5…), so a copy of HD14 imported as IT_Support is *not* used by the app — delete any such spare, or re-point the app's Send button at it in Power Apps Studio if you want HD14 owned by IT_Support like the rest.
