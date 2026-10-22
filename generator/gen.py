@@ -691,7 +691,7 @@ def hd3():
                                      "actions": team_msgs("NewTicket_msg", new_ping, NEW_TICKET_PING_TEAM)}
     # Monitoring: did the requester confirmation, Planner task, channel post and tech ping all go out?
     no_channel = ("if(empty(body('Post_to_Help_Desk_channel')?['id']),"
-                  "createArray(json('{\"name\":\"Post_to_Help_Desk_channel\",\"status\":\"Failed\"}')),createArray())")
+                  "createArray(json('{\"name\":\"Post_to_Help_Desk_channel\",\"status\":\"Failed\"}')),json('[]'))")
     actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
         f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",

@@ -110,6 +110,7 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 | Ticket not created from email | HD1 run history; was it sent to the right mailbox? Outside sender: is their domain/address on the External Senders list? Check the Review folder. |
 | App says error on Send | HD14 run history; the Category chosen must match a SharePoint Category choice |
 | Reminder/close didn't fire | HD6 run history (runs 7am–9pm) |
+| Emails stop but Teams messages still arrive | Power Automate › Connections › Office 365 Outlook. If a flow's email step fails with `Unexpected connection parameter set name: 'oauthDelegated'`, the connection was recreated as the wrong type: make a new Office 365 Outlook connection (default sign-in), delete the old one, re-import `HelpDesk-all-flows.zip` with **Update** on every row. Never import with *Create as new* — that makes duplicate flows. |
 
 ## Flow reference
 
