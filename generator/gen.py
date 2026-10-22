@@ -1962,8 +1962,8 @@ def hd16():
             "runAfter": ra("Daily_email", status=ANY)}),
     ])
     acts["Inbox_old"]["runAfter"] = ra("Unnotified_ids", status=ANY)
-    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Hour", "interval": 1, "timeZone": TZ,
-            "schedule": {"minutes": [30]}}}}
+    trig = {"Recurrence": {"type": "Recurrence", "recurrence": {"frequency": "Week", "interval": 1, "timeZone": TZ,
+            "schedule": {"weekDays": ALLDAYS, "hours": [str(h) for h in range(0, 24)], "minutes": [30]}}}}
     return "HD16 Health check v2", trig, acts
 
 # ---------- packaging ----------
