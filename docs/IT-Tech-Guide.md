@@ -80,10 +80,10 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 Problems reported by the HD3/HD4 self-checks in the last 24 h are added to the band under the cards (the step name is in the alert email).
 
-Behind the panel, three layers of alerts all go to Martin:
+Behind the panel, three layers of alerts all go to Martin **by email only** (mpersaud@branthaven.com):
 
-1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run — the named notification steps directly (confirmation email, confirmation chat, Planner task, channel post; status email, status chat, note email/chat, new-tech chat, Planner move), not just the scope summaries, so a failure nested inside a condition is caught. If any did not succeed, Martin gets an email and a Teams message from IT Support naming the ticket, the failed step, the error text and a link to the flow run. The ticket itself is still created/updated — only the notification is reported.
-2. **HD16 health check, hourly, 24/7.** Updates the panel every run; emails Martin a report once a day at 9:30 am (subject "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n"); Teams-messages him whenever the issue count changes, **between 7 am and 9 pm only** — an overnight problem waits on the panel and is in the 7:30 am message.
+1. **Per-ticket, immediately.** HD3 (ticket created) and HD4 (ticket updated) check their own work at the end of every run — the named notification steps directly (confirmation email, confirmation chat, Planner task, channel post; status email, status chat, note email/chat, new-tech chat, Planner move), not just the scope summaries, so a failure nested inside a condition is caught. If any did not succeed, Martin gets an email naming the ticket, the failed step, the error text and a link to the flow run. The ticket itself is still created/updated — only the notification is reported.
+2. **HD16 health check, hourly, 24/7.** Updates the panel every run; emails Martin a report once a day at 9:30 am (subject "[Help desk health] All clear" or "[Help desk health] PROBLEMS: n"); emails him whenever the issue count changes, **between 7 am and 9 pm only** — an overnight problem waits on the panel and is in the 7:30 am email. Monitoring never sends Teams messages; those are reserved for ticket notifications.
 3. **Hard flow failures.** Power Automate emails the flow owner (IT Support) whenever a run fails outright, plus a weekly digest. To receive these as yourself, open each flow → ⋯ → *Flow failure alerts*.
 
 If an alert names a flow run, open the link: the failed step is highlighted in red with the full error.

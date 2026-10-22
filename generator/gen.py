@@ -178,13 +178,11 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
         (f"{prefix}_names", {"type": "Select", "inputs": {"from": f"@body('{prefix}_problems')", "select": "@item()?['name']"}}),
         (f"{prefix}_alert", cond(f"@greater(length(body('{prefix}_problems')),0)", seq([
             (f"{prefix}_email", mail(ME, subject, html)),
-            (f"{prefix}_teams", {"type": "Scope", "runAfter": ra(f"{prefix}_email", status=("Succeeded", "Failed")),
-                                 "actions": support_msg(f"{prefix}_dm", ME, html)}),
-            # light up the Notifications card on the IT dashboard (HD16 turns it green again after 24h clean)
+            # stamp the dashboard (HD16 shows it in the problem band for 24h). Alerts are email only - no Teams DMs.
             (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health",
-                "item/Share5": 100, "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
+                "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
                 "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',string(length(body('{prefix}_problems'))),' step(s) failed, ',{nowET('MMM d h:mm tt')},' (details emailed)')"},
-                after=ra(f"{prefix}_teams", status=("Succeeded", "Failed")))),
+                after=ra(f"{prefix}_email", status=("Succeeded", "Failed")))),
         ]))),
     ])
 
@@ -1963,8 +1961,9 @@ def hd16():
         ("Daily_email", cond(f"@equals({hourET},9)", {
             "Email_report": mail(ME, "@{concat('[Help desk health] ',if(equals(outputs('IssueCount'),0),'All clear',concat('PROBLEMS: ',string(outputs('IssueCount')))))}",
                                  "@{outputs('Report')}")})),
-        ("Teams_if_changed", {**cond(f"@and({office},greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
-            {"Tell_Martin": {"type": "Scope", "runAfter": {}, "actions": support_msg("Health_dm", ME, "@{outputs('Report')}")}}),
+        # alerts are email only (no Teams DMs for monitoring), and only when the issue count changes, 7am-9pm
+        ("Email_if_changed", {**cond(f"@and({office},greater(outputs('IssueCount'),0),not(equals(outputs('IssueCount'),int(coalesce({prev}?['Total'],0)))))",
+            {"Email_change": mail(ME, "@{concat('[Help desk health] PROBLEMS: ',string(outputs('IssueCount')))}", "@{outputs('Report')}")}),
             "runAfter": ra("Daily_email", status=ANY)}),
     ])
     acts["Inbox_old"]["runAfter"] = ra("Unnotified_ids", status=ANY)
