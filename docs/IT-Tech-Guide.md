@@ -62,7 +62,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 ## Clock, reports and reminders
 
-- **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours Martin and Joseph (first-line) both get a direct Teams ping. Once it's assigned — to either tech or Martin — the normal per-day open reminder takes over and goes to whoever it's assigned to.
+- **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours (once only) Martin and Joseph (first-line) both get a direct Teams ping. Every full business day it stays open after that (24h, 48h, ...) sends a "still open" reminder to whoever it's assigned to (or Martin, if still unassigned) — **and Joseph always gets this one too**, so he stays aware of long-open tickets even when he's not the assignee.
 - **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours), emailed to Martin.
 - **HD7:** a requester can ask for "My open tickets" and gets a list.
 

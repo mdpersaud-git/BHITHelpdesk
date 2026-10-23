@@ -992,9 +992,12 @@ def hd6():
             "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
         ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))",
             team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM))),
-        ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))", {
-            "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
+        # Joseph gets this one too, in addition to whoever it's assigned to (or Martin, if it's still
+        # unassigned) — a harmless duplicate on the rare day he's the assignee himself.
+        ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))",
+            team_msgs("Open_days_msg",
+                f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>",
+                [f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}", TECH2]))),
     ])
     for k in ("Unassigned_at_5_hours", "Open_a_full_business_day"):
         new_case[k]["runAfter"] = ra(list(new_case.keys())[list(new_case.keys()).index(k) - 1], status=("Succeeded", "Failed", "Skipped"))
