@@ -354,7 +354,8 @@ def sla_start_ticks(created_expr):
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ALLDAYS = ["Sunday"] + WEEKDAYS + ["Saturday"]
-DAY_H = 14   # business day = 7am-9pm = 14 hours
+DAY_H = 14   # HD6's hourly-clock day = 8am-9pm = 14 hours (distinct from SUPPORT_OPEN_H/CLOSE_H's 7am-9pm,
+             # which is only used for the Response(min) "effective start" calc, not this counter)
 
 def recurrence(hours, days=WEEKDAYS):
     return {"type": "Recurrence", "recurrence": {
@@ -1692,7 +1693,7 @@ def hd15():
             ("Resolved_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']", "where":
                 f"@if(empty(item()?['ResolvedOn']),false,greaterOrEquals(ticks(item()?['ResolvedOn']),{d30}))"}}),
             ("Res_ok", {"type": "Query", "inputs": {"from": "@body('Resolved_30')", "where":
-                "@lessOrEquals(float(coalesce(item()?['SLAHours'],0)),24)"}}),   # SLA clock hours (7am-9pm, pauses while waiting on the user)
+                "@lessOrEquals(float(coalesce(item()?['SLAHours'],0)),24)"}}),   # SLA clock hours (HD6's 8am-9pm counter, pauses while waiting on the user)
             ("Update_service", sp("PatchItem", {"table": DASH, **item})),
         ]
     catkey = "if(or(empty(item()?['Category']?['Value']),equals(item()?['Category']?['Value'],'Uncategorised')),'Uncategorized',item()?['Category']?['Value'])"

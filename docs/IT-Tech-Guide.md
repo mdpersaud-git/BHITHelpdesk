@@ -1,7 +1,7 @@
 # Branthaven IT Help Desk – Technician Guide
 
 Site: https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2
-Business day for SLA purposes: **7am–9pm**, every day.
+Business day for SLA purposes: the hourly clock (HD6, and the BusinessHoursOpen/SLAHours it writes) runs **8am–9pm**, every day. Response-time credit ("Response (min)") is more generous — it counts from 7am (support opens) regardless of when the ticket was actually raised; see the note under "Service levels" below.
 
 ## How tickets arrive
 
@@ -62,7 +62,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 
 ## Clock, reports and reminders
 
-- **HD6 (every day, 7am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours (once only) Martin and Joseph (first-line) both get a direct Teams ping. Every full business day it stays open after that (24h, 48h, ...) sends a "still open" reminder — while it's still unassigned, that goes to Martin and Joseph (same audience as the 5-hour ping, just repeating daily); once a tech is assigned, it goes to that tech alone.
+- **HD6 (every day, 8am–9pm):** counts business hours open, handles the 24h reminder and 48h auto-close for resolved tickets. A ticket unassigned for 4 hours is posted in the Help Desk channel; at 5 hours (once only) Martin and Joseph (first-line) both get a direct Teams ping. Every full business day it stays open after that (24h, 48h, ...) sends a "still open" reminder — while it's still unassigned, that goes to Martin and Joseph (same audience as the 5-hour ping, just repeating daily); once a tech is assigned, it goes to that tech alone.
 - **HD8 (9pm daily):** daily report of overdue tickets (open longer than a business day) and unassigned tickets (4+ hours), emailed to Martin.
 - **HD7:** a requester can ask for "My open tickets" and gets a list.
 
@@ -117,7 +117,7 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 | No confirmation sent | HD3 run history (Power Automate), requester email field on the ticket |
 | Ticket not created from email | HD1 run history; was it sent to the right mailbox? Outside sender: is their domain/address on the External Senders list? Check the Review folder. |
 | App says error on Send | HD14 run history; the Category chosen must match a SharePoint Category choice |
-| Reminder/close didn't fire | HD6 run history (runs 7am–9pm) |
+| Reminder/close didn't fire | HD6 run history (runs 8am–9pm) |
 | Emails stop but Teams messages still arrive | Power Automate › Connections › Office 365 Outlook. If a flow's email step fails with `Unexpected connection parameter set name: 'oauthDelegated'`, the connection was recreated as the wrong type: make a new Office 365 Outlook connection (default sign-in), delete the old one, re-import `HelpDesk-all-flows.zip` with **Update** on every row. Never import with *Create as new* — that makes duplicate flows. |
 | Every HD3 / HD4 run shows **Failed** but the emails and Teams posts still go out | The run died in its last step, `Health_problems` (the self-check). Open a failed run: if the message is `substring … start index must be less than the length of the string`, a leaf action with an empty error text hit `substring('',0,0)`. Fixed 2026-10-22 in `generator/gen.py` (`leaf_item` pads the text before `substring`); re-import `HD3.zip` and `HD4.zip` from `flows/` with **Update**. Microsoft's weekly "N of your flow(s) have failed" email counts these runs even though nothing user-facing was lost. |
 | SharePoint Quick close button opens a **Run flow** panel with no resolution box, just "Review connections and actions" | The trigger's `schema` wasn't wrapped the way Power Automate's SharePoint button connector expects — it needs a top-level `{"type":"object","properties":{"rows":{...}},"required":["rows"]}` with an `entity` (the row ID) alongside `text` under `items.properties`, not the flatter shape. Found 2026-10-22 by touching the trigger's description in the flow designer and letting Power Automate re-save/canonicalize it. Fixed in `generator/gen.py` (`hd18`'s `trig` schema); re-import `HD18.zip` from `flows/` with **Update**. |
