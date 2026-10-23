@@ -898,9 +898,21 @@ def hd4():
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
         ("Part_C_status_changed", {**cond(f"@not(equals({V},coalesce({t('LastNotifiedStatus')},'')))", partC),
                                    "runAfter": ra("Part_A_note_for_user", status=ALL)}),
+        # Keep the Planner task's own Notes in sync with the ticket: a note added, a status change, and the
+        # resolution text on Resolved/Closed (StatusLine already folds "· Resolution: ..." into the conversation
+        # line, so it shows up here too) all land in the task without anyone opening SharePoint. Rebuilt in full
+        # each run — simpler and more robust than trying to append — and capped well under Planner's description
+        # limit.
+        ("Sync_task_notes", {**cond(hasTask, {
+            "Update_task_notes": op("shared_planner", "UpdateTaskDetails_V2", {
+                "id": f"@{t('PlannerTaskId')}",
+                "body/description": f"@concat('IT-',{ID},': ',{t('Title')},decodeUriComponent('%0A'),'{LIST_URL}',"
+                    f"string({ID}),decodeUriComponent('%0A%0A'),substring(variables('varConversation'),0,"
+                    f"min(length(variables('varConversation')),1800)))"})}),
+            "runAfter": ra("Part_C_status_changed", status=ALL)}),
         # ticks between the SLA start (7am rule) and the first response; 0 when there is no first response yet
         ("ResponseTicks", {**compose(f"@if(empty(variables('varFirstResponse')),0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))}))"),
-                           "runAfter": ra("Part_C_status_changed", status=ALL)}),
+                           "runAfter": ra("Sync_task_notes", status=ALL)}),
         ("Update_item", {**sp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{t('Title')}",
             "item/Status/Value": f"@{V}",
@@ -934,7 +946,7 @@ def hd4():
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
-        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task")))
+        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"

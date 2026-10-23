@@ -13,6 +13,8 @@ Business day for SLA purposes: the hourly clock (HD6, and the BusinessHoursOpen/
 
 Every new ticket then runs HD3: it sets permissions (the requester sees only their own ticket), creates the **Planner task**, emails and messages the requester a confirmation (as IT Support), alerts IT in the Help Desk channel, and sends Martin and Joseph a direct Teams message from IT Support with the ticket number, requester, priority and link.
 
+Every HD4 run (any note, status change, or resolution) also rewrites the Planner task's own **Notes** to the ticket title, a link, and the ticket's conversation history (capped at ~1800 characters) — so a tech reading the task in Planner sees the same notes and resolution text as the ticket itself, without opening SharePoint. It's a full rebuild each time, not an append, so nothing you type directly into the Planner task's notes will survive the next ticket update — put any notes on the ticket (Edit ticket / note box) instead.
+
 ## Your daily workflow
 
 1. Watch the **Help Desk channel** and the **Planner board** (buckets: New, In progress, Waiting, Done).
