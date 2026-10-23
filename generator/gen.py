@@ -2068,15 +2068,22 @@ def hd18():
     clicked (unless already assigned), set to Closed and given the resolution in one update, so HD4 sends the
     requester a single "Resolved" message exactly as it does after the Teams Quick close.
     The trigger JSON is what Power Automate itself generates for the SharePoint "For a selected item" trigger
-    (operation GetItemHybridTriggerSchema); the clicker's email arrives base64-encoded in a trigger header."""
+    (operation GetItemHybridTriggerSchema); the clicker's email arrives base64-encoded in a trigger header.
+    The schema must be wrapped exactly as Power Automate's own designer canonicalizes it — a top-level
+    {"type":"object","properties":{"rows":{...}},"required":["rows"]}, with an "entity" (the row's ID) sitting
+    alongside "text" under items.properties — or the SharePoint "Run flow" panel renders no input box at all for
+    a button-triggered flow, even though the flow itself is otherwise valid. Confirmed by touching the trigger's
+    description in the designer and re-saving: Power Automate rewrote the flatter schema into this shape."""
     trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
         "operationId": "GetItemHybridTriggerSchema",
         "parameters": {"dataset": SITE, "table": TICKETS},
-        "schema": {"rows": {"type": "array", "items": {"type": "object", "properties": {
+        "schema": {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {
             "text": {"description": "What fixed it (the requester sees this)", "title": "Resolution", "type": "string",
-                     "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True}}, "required": ["text"]}}},
+                     "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
+            "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
+                       "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
         "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
-        "splitOn": "@triggerOutputs()?['body/rows']"}}
+        "splitOn": "@triggerBody()['rows']"}}
     acts = seq([
         ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
         ("TicketId", compose("@triggerBody()?['entity']?['ID']")),
