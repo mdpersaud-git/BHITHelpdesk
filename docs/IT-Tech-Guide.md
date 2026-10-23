@@ -110,6 +110,15 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 - The flows address the list by GUID (`TICKETS` in `gen.py`), never by title — renaming the list must not break them. (Until Oct 2026 the permission steps used the old title `Tickets` and failed silently after the list was renamed; run **HD17 Fix ticket permissions** once (button flow) to stop the list inheriting, drop Visitors/Members, and backfill every existing ticket. Safe to re-run.)
 - Check: `…/_api/web/lists(guid'22c09b0b-…')?$select=HasUniqueRoleAssignments` should be `true` for the list and for every item.
 
+### Other lists locked down from the site (2026-10-23)
+
+Three more lists on the help desk site hold data end users shouldn't see, but — unlike Tickets — nothing re-locks them automatically, so if one is ever recreated it needs to be redone by hand:
+
+- **External Senders**, **Live overview** (the dashboard's backing data), and **Pending replies** (raw requester reply text, see below) all have **unique permissions**: the site Owners group gets Full Control, Martin/Talal/Joseph get **Edit**, and the IT Support service account gets **Read** (flows read/write these as whichever SharePoint connection the flow runs under — currently Martin's). The site's Members/Visitors groups are **not** on any of the three.
+- Why it mattered: all three previously inherited site permissions, so any of the ~75 site Members/Visitors could open them from **Site Contents** — External Senders exposed the allow-list itself, Live overview exposed SLA/health numbers, and Pending replies exposed other requesters' raw reply text keyed by email address.
+- Check: `…/_api/web/lists(guid'<list guid>')?$select=HasUniqueRoleAssignments` should be `true` for each of the three (guids: External Senders `37b12028-370c-4b21-b31c-11362129c7fe`, Live overview `24631152-bdde-4654-82a4-d64bb0bb9b3b`, Pending replies `189e9634-988d-40ae-afce-0cb6eef5314c`).
+- Left alone: Documents, Events, Form Templates, Holidays, Site Assets, Site Pages, Style Library — all empty or non-sensitive (Holidays is just date rows used by the business-hours check).
+
 ## When something looks wrong
 
 | Symptom | Check |
