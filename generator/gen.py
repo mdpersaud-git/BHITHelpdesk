@@ -887,7 +887,12 @@ def hd4():
                                                       "item/AssignedTo/Claims": f"@{t('Editor/Email')}"})),
                 ("Stop_until_rerun", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}}),
             ]))),
-        ("Part_B_tech_assigned", cond(f"@and(not(empty(outputs('Tech'))),not(equals(outputs('Tech'),toLower(coalesce({t('LastNotifiedTech')},'')))))", partB)),
+        # Skip the Planner assignment (and its "assigned to you" notification) when this same update is also
+        # landing on Resolved/Closed — e.g. Quick close, which sets AssignedTo and Status together. Part C
+        # below still marks the Planner task done; there's no point notifying someone of an assignment to a
+        # task that's complete in the same breath. A tech assigned while the ticket stays open still gets
+        # notified as before.
+        ("Part_B_tech_assigned", cond(f"@and(not(empty(outputs('Tech'))),not(equals(outputs('Tech'),toLower(coalesce({t('LastNotifiedTech')},'')))),not(contains({arr([S_RES, S_CLOSED])},{V})))", partB)),
         ("Part_A_note_for_user", {**cond(f"@not(empty(coalesce({t('NoteToUser')},'')))", partA),
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
         ("Part_C_status_changed", {**cond(f"@not(equals({V},coalesce({t('LastNotifiedStatus')},'')))", partC),
