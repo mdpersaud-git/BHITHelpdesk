@@ -873,6 +873,20 @@ def hd4():
         ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
         ("Close_guard", {"type": "Scope", "runAfter": {}, "actions": close_guard}),
+        # A tech who resolves/closes a ticket straight from the SharePoint form usually forgets to assign it, so the
+        # requester's email says "Not yet assigned". Teams Quick close assigns the responder; do the same here: if
+        # the status just moved to Resolved/Closed with no assignee and the editor is a person (not the flow
+        # account), write the editor into IT Assigned and stop — that edit re-triggers HD4, which then sends the
+        # notifications with the assignee filled in (LastNotifiedStatus is still the old value, so nothing is lost).
+        ("Self_assign_on_close", cond(
+            f"@and(not(outputs('Needs_resolution_HD4')),empty(coalesce({t('AssignedTo/Email')},'')),"
+            f"contains({arr([S_RES, S_CLOSED])},{V}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),"
+            f"not(empty(coalesce({t('Editor/Email')},''))),not(equals(toLower(coalesce({t('Editor/Email')},'')),'{MBX.lower()}')))",
+            seq([
+                ("Assign_to_editor", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{t('Title')}",
+                                                      "item/AssignedTo/Claims": f"@{t('Editor/Email')}"})),
+                ("Stop_until_rerun", {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}}),
+            ]))),
         ("Part_B_tech_assigned", cond(f"@and(not(empty(outputs('Tech'))),not(equals(outputs('Tech'),toLower(coalesce({t('LastNotifiedTech')},'')))))", partB)),
         ("Part_A_note_for_user", {**cond(f"@not(empty(coalesce({t('NoteToUser')},'')))", partA),
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
@@ -1788,7 +1802,7 @@ def tech_sla():
 EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "HD4 Ticket updated",
                   "HD5 Planner task completed", "HD6 Hourly clock", "HD7 My open tickets", "HD8 Daily report",
                   "HD9 Card actions", "HD11 Tech thread replies", "HD12 Requester replies in Teams",
-                  "HD15 Dashboard stats", "HD16 Health check v2"]
+                  "HD15 Dashboard stats", "HD16 Health check v2", "HD18 Quick close (SharePoint)"]
 PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support account)", "Probe_Teams": "Teams",
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
@@ -2047,6 +2061,38 @@ def hd17():
     acts["Get_tickets"]["runAfter"] = ra("Remove_members", status=("Succeeded", "Failed"))
     return "HD17 Fix ticket permissions (run once)", trig, acts
 
+# ---------- HD18 Quick close (SharePoint) ----------
+def hd18():
+    """The SharePoint twin of the Teams card's Quick close. A button in the Tickets list's ID column runs this
+    flow ("For a selected item"); SharePoint asks for the resolution, then the ticket is assigned to whoever
+    clicked (unless already assigned), set to Closed and given the resolution in one update, so HD4 sends the
+    requester a single "Resolved" message exactly as it does after the Teams Quick close.
+    The trigger JSON is what Power Automate itself generates for the SharePoint "For a selected item" trigger
+    (operation GetItemHybridTriggerSchema); the clicker's email arrives base64-encoded in a trigger header."""
+    trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
+        "operationId": "GetItemHybridTriggerSchema",
+        "parameters": {"dataset": SITE, "table": TICKETS},
+        "schema": {"rows": {"type": "array", "items": {"type": "object", "properties": {
+            "text": {"description": "What fixed it (the requester sees this)", "title": "Resolution", "type": "string",
+                     "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True}}, "required": ["text"]}}},
+        "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
+        "splitOn": "@triggerOutputs()?['body/rows']"}}
+    acts = seq([
+        ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
+        ("TicketId", compose("@triggerBody()?['entity']?['ID']")),
+        ("QuickText", compose("@trim(coalesce(triggerBody()?['text'],''))")),
+        ("Get_item", sp("GetItem", {"id": "@outputs('TicketId')"})),
+        ("Quick_close", cond("@empty(outputs('QuickText'))", {
+            "Say_need_resolution_quick": scope_msg("Need_res_quick_msg", "@outputs('Clicker')",
+                "<p>IT-@{outputs('TicketId')} wasn't closed — Quick close needs the resolution typed in the box.</p>")},
+            {"Close_now": sp("PatchItem", {
+                "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
+                "item/Status/Value": S_CLOSED,
+                "item/AssignedTo/Claims": "@coalesce(body('Get_item')?['AssignedTo']?['Email'],outputs('Clicker'))",
+                "item/Resolution": "@outputs('QuickText')"})})),
+    ])
+    return "HD18 Quick close (SharePoint)", trig, acts
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -2105,7 +2151,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])

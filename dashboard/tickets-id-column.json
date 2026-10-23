@@ -1,0 +1,29 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {"display": "flex", "align-items": "center"},
+  "children": [
+    {"elmType": "div", "txtContent": "='IT-' + @currentField",
+     "style": {"font-weight": "700", "color": "#0f6cbd", "white-space": "nowrap", "min-width": "48px", "margin-right": "6px"}},
+    {"elmType": "button", "customRowAction": {"action": "editProps"},
+     "attributes": {"title": "Edit ticket", "class": "ms-bgColor-neutralLighter--hover"},
+     "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "inline-block", "border-radius": "4px"},
+     "children": [{"elmType": "span", "attributes": {"iconName": "Edit"}, "style": {"color": "#0f6cbd", "font-size": "15px"}}]},
+    {"elmType": "button", "customRowAction": {"action": "setValue", "actionInput": {"AssignedTo": "@me"}},
+     "attributes": {"title": "Assign to me", "class": "ms-bgColor-neutralLighter--hover"},
+     "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if([$AssignedTo.email]=='','inline-block','none')", "border-radius": "4px"},
+     "children": [{"elmType": "span", "attributes": {"iconName": "AddFriend"}, "style": {"color": "#0f6cbd", "font-size": "15px"}}]},
+    {"elmType": "button", "customRowAction": {"action": "setValue", "actionInput": {"Status": "In Progress", "AssignedTo": "@me"}},
+     "attributes": {"title": "Start work (set In Progress and assign to me)", "class": "ms-bgColor-neutralLighter--hover"},
+     "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if(([$Status]=='Open' || [$Status]=='Assigned') && [$AssignedTo.email]=='','inline-block','none')", "border-radius": "4px"},
+     "children": [{"elmType": "span", "attributes": {"iconName": "Play"}, "style": {"color": "#0b6a0b", "font-size": "15px"}}]},
+    {"elmType": "button", "customRowAction": {"action": "setValue", "actionInput": {"Status": "In Progress"}},
+     "attributes": {"title": "Start work (set In Progress)", "class": "ms-bgColor-neutralLighter--hover"},
+     "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if(([$Status]=='Open' || [$Status]=='Assigned') && [$AssignedTo.email]!='','inline-block','none')", "border-radius": "4px"},
+     "children": [{"elmType": "span", "attributes": {"iconName": "Play"}, "style": {"color": "#0b6a0b", "font-size": "15px"}}]},
+    {"elmType": "button", "customRowAction": {"action": "executeFlow", "actionParams": "{\"id\": \"HD18_FLOW_ID\"}"},
+     "attributes": {"title": "Quick close (type the resolution; assigns the ticket to you and closes it)", "class": "ms-bgColor-neutralLighter--hover"},
+     "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if([$Status]=='Closed','none','inline-block')", "border-radius": "4px"},
+     "children": [{"elmType": "span", "attributes": {"iconName": "Completed"}, "style": {"color": "#0b6a0b", "font-size": "15px"}}]}
+  ]
+}
