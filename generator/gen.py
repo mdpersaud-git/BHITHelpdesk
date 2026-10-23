@@ -1807,6 +1807,15 @@ PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
 
+# Flow-level "Description" (Power Automate flow Details > Edit). SharePoint's button-flow "Run flow" confirm
+# panel shows this under the owner line, so it's the only place to put on-panel instructions for a flow with
+# no adaptive-card UI of its own (see HD18). Keyed by flow display name so a re-import with Update keeps it
+# instead of silently dropping back to blank.
+FLOW_DESCRIPTIONS = {
+    "HD18 Quick close (SharePoint)": "Type the resolution below, then click Run flow to assign this ticket to "
+                                      "you, close it, and email the requester.",
+}
+
 def hd16():
     """Runs hourly, 24/7. Seven cards on the IT dashboard "System health" panel, a one-line-per-problem band under
     them, an ISO timestamp the dashboard uses to grey the panel out when this flow stops, a daily 9:30 email and a
@@ -2132,6 +2141,7 @@ def write_package(flows, zip_path, pkg_name):
         flow_guid = str(uuid.uuid4())
         d = {"name": flow_guid, "id": f"/providers/Microsoft.Flow/flows/{flow_guid}", "type": "Microsoft.Flow/flows",
              "properties": {"apiId": "/providers/Microsoft.PowerApps/apis/shared_logicflows", "displayName": name,
+                "description": FLOW_DESCRIPTIONS.get(name, ""),
                 "definition": build_definition(name, trig, acts),
                 "connectionReferences": {a: {"connectionName": APIS[a][2], "source": "Embedded",
                     "id": f"/providers/Microsoft.PowerApps/apis/shared_{APIS[a][0]}", "tier": "NotSpecified", "apiName": APIS[a][0],
