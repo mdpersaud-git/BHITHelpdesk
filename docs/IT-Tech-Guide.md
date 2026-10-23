@@ -117,6 +117,7 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 | App says error on Send | HD14 run history; the Category chosen must match a SharePoint Category choice |
 | Reminder/close didn't fire | HD6 run history (runs 7am–9pm) |
 | Emails stop but Teams messages still arrive | Power Automate › Connections › Office 365 Outlook. If a flow's email step fails with `Unexpected connection parameter set name: 'oauthDelegated'`, the connection was recreated as the wrong type: make a new Office 365 Outlook connection (default sign-in), delete the old one, re-import `HelpDesk-all-flows.zip` with **Update** on every row. Never import with *Create as new* — that makes duplicate flows. |
+| Every HD3 / HD4 run shows **Failed** but the emails and Teams posts still go out | The run died in its last step, `Health_problems` (the self-check). Open a failed run: if the message is `substring … start index must be less than the length of the string`, a leaf action with an empty error text hit `substring('',0,0)`. Fixed 2026-10-22 in `generator/gen.py` (`leaf_item` pads the text before `substring`); re-import `HD3.zip` and `HD4.zip` from `flows/` with **Update**. Microsoft's weekly "N of your flow(s) have failed" email counts these runs even though nothing user-facing was lost. |
 
 ## Flow reference
 

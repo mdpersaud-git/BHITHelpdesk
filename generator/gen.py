@@ -149,9 +149,11 @@ RUN_LINK = ("https://make.powerautomate.com/environments/@{workflow()?['tags']?[
 def leaf_item(x):
     """A {name,status,error:{message}} record for one named action, built as a JSON string so it can be
     unioned with result() output. Quotes, backslashes and newlines in the error text are flattened so the
-    JSON stays valid; the text is cut at 160 characters."""
+    JSON stays valid; the text is cut at 160 characters. The message is padded with one space before
+    substring(): a succeeded action has an empty message and substring('',0,0) is an error in Power Automate
+    ("start index must be less than the length of the string"), which made every HD3/HD4 run end Failed."""
     msg = "coalesce(actions('%s')?['error']?['message'],'')" % x
-    safe = ("replace(replace(replace(substring(%s,0,min(length(%s),160)),'\"',''''),'\\',' '),decodeUriComponent('%%0A'),' ')"
+    safe = ("trim(replace(replace(replace(substring(concat(%s,' '),0,min(length(%s),160)),'\"',''''),'\\',' '),decodeUriComponent('%%0A'),' '))"
             % (msg, msg))
     return ("json(concat('{\"name\":\"%s\",\"status\":\"',coalesce(actions('%s')?['status'],'Skipped'),"
             "'\",\"error\":{\"message\":\"',%s,'\"}}'))" % (x, x, safe))

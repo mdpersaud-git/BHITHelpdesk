@@ -5,4 +5,4 @@
 - Don't replace a documented formula with a "simpler" one (e.g. `ddCategory.Default` must stay the live keyword formula in `app/ddCategory-Default.fx`).
 - Category names must match in three places: the Tickets list choice column, `ddCategory.Items`, and `generator/gen.py`.
 - The dashboard's health panel formatting lives in `dashboard/health-view.json`; change it there and paste into the SharePoint view, never only in SharePoint.
-- Power Automate expressions: never `createArray()` with no arguments (use `json('[]')`); never trust `result('Scope')` for nested steps — list leaf actions in `self_check(..., leaf=...)`.
+- Power Automate expressions: never `createArray()` with no arguments (use `json('[]')`); never trust `result('Scope')` for nested steps — list leaf actions in `self_check(..., leaf=...)`; never `substring(x,0,…)` on a string that can be empty (`substring('',0,0)` throws "start index must be less than the length") — pad it first: `substring(concat(x,' '),0,min(length(x),N))`.
