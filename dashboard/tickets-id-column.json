@@ -21,7 +21,7 @@
      "attributes": {"title": "Start work (set In Progress)", "class": "ms-bgColor-neutralLighter--hover"},
      "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if(([$Status]=='Open' || [$Status]=='Assigned') && [$AssignedTo.email]!='','inline-block','none')", "border-radius": "4px"},
      "children": [{"elmType": "span", "attributes": {"iconName": "Play"}, "style": {"color": "#0b6a0b", "font-size": "15px"}}]},
-    {"elmType": "button", "customRowAction": {"action": "executeFlow", "actionParams": "{\"id\": \"HD18_FLOW_ID\"}"},
+    {"elmType": "button", "customRowAction": {"action": "executeFlow", "actionParams": "{\"id\": \"0d643975-fcc0-4006-b900-51a606903063\"}"},
      "attributes": {"title": "Quick close (type the resolution; assigns the ticket to you and closes it)", "class": "ms-bgColor-neutralLighter--hover"},
      "style": {"border": "none", "background-color": "transparent", "cursor": "pointer", "padding": "4px", "margin-right": "2px", "display": "=if([$Status]=='Closed','none','inline-block')", "border-radius": "4px"},
      "children": [{"elmType": "span", "attributes": {"iconName": "Completed"}, "style": {"color": "#0b6a0b", "font-size": "15px"}}]}
