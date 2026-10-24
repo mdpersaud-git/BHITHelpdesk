@@ -890,12 +890,19 @@ def hd4():
         # Fetched fresh (not from the trigger body) so a file attached separately from the edit that fired this
         # run still shows up: attaching a file doesn't itself touch Status/AssignedTo/NoteToUser, so by the time
         # HD4 runs for some other reason, any attachment already on the item is picked up. Only files not already
-        # in NotifiedAttachments (hidden field, pipe-separated filenames) get linked — otherwise the requester's
-        # own originally-submitted file would get re-linked on every single later update. Update_item below rolls
-        # the baseline forward to every attachment currently on the item whenever a note/status notification
-        # actually goes out.
+        # in NotifiedAttachments0 (pipe-separated filenames, not shown on any form) get linked — otherwise the
+        # requester's own originally-submitted file would get re-linked on every single later update. Update_item
+        # below rolls the baseline forward to every attachment currently on the item whenever a note/status
+        # notification actually goes out.
+        # Internal name is NotifiedAttachments0, not NotifiedAttachments: the first column was created with
+        # Hidden="TRUE" in its schema XML, which SharePoint will neither un-hide nor delete afterward (REST
+        # errors "Cannot change Hidden attribute"/"You cannot delete a hidden column") - so that GUID is stranded
+        # on the list forever, unused. Recreated as Hidden="FALSE" with ShowInDisplayForm/EditForm/NewForm/
+        # ViewForms all FALSE instead (keeps it off every form and view without tripping that restriction), which
+        # SharePoint auto-suffixed to NotifiedAttachments0 since the name was taken. Never create a SharePoint
+        # column as Hidden="TRUE" for anything a flow needs to reference - use the Show-In-*="FALSE" properties.
         ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/AttachmentFiles")),
-        ("NotifiedList", {**compose(f"@split(coalesce({t('NotifiedAttachments')},''),'|')"),
+        ("NotifiedList", {**compose(f"@split(coalesce({t('NotifiedAttachments0')},''),'|')"),
                           "runAfter": ra("Get_attachments", status=ALL)}),
         ("New_attachments", {"type": "Query", "runAfter": ra("NotifiedList", status=ALL), "inputs": {
             "from": "@coalesce(body('Get_attachments')?['value'],json('[]'))",
@@ -955,7 +962,7 @@ def hd4():
             "item/NoteToUser": "@null",
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
-            "item/NotifiedAttachments": f"@if({files_shown},join(body('AllFileNames'),'|'),coalesce({t('NotifiedAttachments')},''))",
+            "item/NotifiedAttachments0": f"@if({files_shown},join(body('AllFileNames'),'|'),coalesce({t('NotifiedAttachments0')},''))",
             # ResolvedOn is also stamped when a ticket goes straight to Closed (Quick close) so it counts as resolved
             "item/ResolvedOn": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),utcNow(),{t('ResolvedOn')})",
             "item/ClosedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_CLOSED}')),utcNow(),{t('ClosedOn')})",

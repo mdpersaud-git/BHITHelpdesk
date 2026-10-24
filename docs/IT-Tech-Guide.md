@@ -17,7 +17,7 @@ Every HD4 run (any note, status change, or resolution) also rewrites the Planner
 
 **Attaching a file to a ticket:** attaching it doesn't notify the requester by itself — attaching a file doesn't change Status, IT Assigned, or Note to requester, and only those trigger HD4. Put a line in **Note to requester** (even just "see attached file") so HD4 fires. When it does, HD4 checks the ticket's attachments fresh each run and, if any haven't been linked before, adds a direct download link for each one right in the email and Teams message — the requester doesn't need to open the ticket just to find the file.
 
-Only *new* attachments get linked, not every file ever added to the ticket — a hidden **NotifiedAttachments** field (pipe-separated filenames, not shown on the form) tracks what's already gone out, so the requester's own originally-submitted file doesn't get re-linked on every later update. It only advances when a note/status notification actually sends — a reassignment-only edit with no note won't mark a pending file as "seen."
+Only *new* attachments get linked, not every file ever added to the ticket — a **NotifiedAttachments0** field (pipe-separated filenames, kept off every form and view) tracks what's already gone out, so the requester's own originally-submitted file doesn't get re-linked on every later update. It only advances when a note/status notification actually sends — a reassignment-only edit with no note won't mark a pending file as "seen." (It's `NotifiedAttachments0`, not `NotifiedAttachments` — see `CLAUDE.md` for why.)
 
 ## Your daily workflow
 
