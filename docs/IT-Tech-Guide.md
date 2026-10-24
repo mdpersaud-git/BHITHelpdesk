@@ -15,7 +15,9 @@ Every new ticket then runs HD3: it sets permissions (the requester sees only the
 
 Every HD4 run (any note, status change, or resolution) also rewrites the Planner task's own **Notes** to the ticket title, a link, and the ticket's conversation history (capped at ~1800 characters) — so a tech reading the task in Planner sees the same notes and resolution text as the ticket itself, without opening SharePoint. It's a full rebuild each time, not an append, so nothing you type directly into the Planner task's notes will survive the next ticket update — put any notes on the ticket (Edit ticket / note box) instead.
 
-**Attaching a file to a ticket:** attaching it doesn't notify the requester by itself — attaching a file doesn't change Status, IT Assigned, or Note to requester, and only those trigger HD4. Put a line in **Note to requester** (even just "see attached file") so HD4 fires. When it does, HD4 now checks the ticket's attachments fresh each run and, if any exist, adds a direct download link for each one right in the email and Teams message — the requester doesn't need to open the ticket just to find the file.
+**Attaching a file to a ticket:** attaching it doesn't notify the requester by itself — attaching a file doesn't change Status, IT Assigned, or Note to requester, and only those trigger HD4. Put a line in **Note to requester** (even just "see attached file") so HD4 fires. When it does, HD4 checks the ticket's attachments fresh each run and, if any haven't been linked before, adds a direct download link for each one right in the email and Teams message — the requester doesn't need to open the ticket just to find the file.
+
+Only *new* attachments get linked, not every file ever added to the ticket — a hidden **NotifiedAttachments** field (pipe-separated filenames, not shown on the form) tracks what's already gone out, so the requester's own originally-submitted file doesn't get re-linked on every later update. It only advances when a note/status notification actually sends — a reassignment-only edit with no note won't mark a pending file as "seen."
 
 ## Your daily workflow
 

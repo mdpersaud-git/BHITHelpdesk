@@ -761,6 +761,12 @@ def hd4():
     # Status/AssignedTo/NoteToUser). Folded into every note/status notification so the requester doesn't have
     # to open the ticket just to find a file a tech attached.
     files_html = f"@{{if(outputs('HasFiles'),concat('<p><b>Attached file(s):</b> ',join(body('FileLinks'),' &nbsp;&middot;&nbsp; '),'</p>'),'')}}"
+    # True exactly when a note/status notification with files_html in it is actually going out this run — the
+    # same two conditions that gate Email_the_note (note, same status) and Email_status (status changed, has a
+    # requester email). Only then does Update_item roll NotifiedAttachments forward; otherwise a run with no
+    # outgoing notification (e.g. a pure reassignment) would mark files "seen" without ever showing them.
+    files_shown = (f"or(and(not(empty(coalesce({t('NoteToUser')},''))),equals({V},coalesce({t('LastNotifiedStatus')},''))),"
+                   f"and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),not(empty(outputs('ReqEmail')))))")
 
     # Part B: a tech was assigned (runs first so Open -> Assigned feeds the status email)
     partB = seq([
@@ -883,15 +889,25 @@ def hd4():
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
         # Fetched fresh (not from the trigger body) so a file attached separately from the edit that fired this
         # run still shows up: attaching a file doesn't itself touch Status/AssignedTo/NoteToUser, so by the time
-        # HD4 runs for some other reason, any attachment already on the item is picked up and linked for the
-        # requester instead of sitting there unannounced.
+        # HD4 runs for some other reason, any attachment already on the item is picked up. Only files not already
+        # in NotifiedAttachments (hidden field, pipe-separated filenames) get linked — otherwise the requester's
+        # own originally-submitted file would get re-linked on every single later update. Update_item below rolls
+        # the baseline forward to every attachment currently on the item whenever a note/status notification
+        # actually goes out.
         ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/AttachmentFiles")),
-        ("HasFiles", {**compose("@greater(length(coalesce(body('Get_attachments')?['value'],json('[]'))),0)"),
-                      "runAfter": ra("Get_attachments", status=ALL)}),
-        ("FileLinks", {"type": "Select", "runAfter": ra("HasFiles", status=ALL), "inputs": {"from": "@body('Get_attachments')?['value']",
+        ("NotifiedList", {**compose(f"@split(coalesce({t('NotifiedAttachments')},''),'|')"),
+                          "runAfter": ra("Get_attachments", status=ALL)}),
+        ("New_attachments", {"type": "Query", "runAfter": ra("NotifiedList", status=ALL), "inputs": {
+            "from": "@coalesce(body('Get_attachments')?['value'],json('[]'))",
+            "where": "@not(contains(outputs('NotifiedList'),item()?['FileName']))"}}),
+        ("HasFiles", {**compose("@greater(length(coalesce(body('New_attachments'),json('[]'))),0)"),
+                      "runAfter": ra("New_attachments", status=ALL)}),
+        ("FileLinks", {"type": "Select", "runAfter": ra("HasFiles", status=ALL), "inputs": {"from": "@coalesce(body('New_attachments'),json('[]'))",
             "select": "@concat('<a href=\"https://branthavenhomes.sharepoint.com',item()?['ServerRelativeUrl'],'\">',item()?['FileName'],'</a>')"}}),
+        ("AllFileNames", {"type": "Select", "runAfter": ra("FileLinks", status=ALL), "inputs": {
+            "from": "@coalesce(body('Get_attachments')?['value'],json('[]'))", "select": "@item()?['FileName']"}}),
         # a failure fetching/attachments never blocks notifications or anything else below it
-        ("Close_guard", {"type": "Scope", "runAfter": ra("FileLinks", status=ALL), "actions": close_guard}),
+        ("Close_guard", {"type": "Scope", "runAfter": ra("AllFileNames", status=ALL), "actions": close_guard}),
         # A tech who resolves/closes a ticket straight from the SharePoint form usually forgets to assign it, so the
         # requester's email says "Not yet assigned". Teams Quick close assigns the responder; do the same here: if
         # the status just moved to Resolved/Closed with no assignee and the editor is a person (not the flow
@@ -939,6 +955,7 @@ def hd4():
             "item/NoteToUser": "@null",
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
+            "item/NotifiedAttachments": f"@if({files_shown},join(body('AllFileNames'),'|'),coalesce({t('NotifiedAttachments')},''))",
             # ResolvedOn is also stamped when a ticket goes straight to Closed (Quick close) so it counts as resolved
             "item/ResolvedOn": f"@if(and(empty({t('ResolvedOn')}),not(equals({V},coalesce({t('LastNotifiedStatus')},''))),contains({arr([S_RES, S_CLOSED])},{V})),utcNow(),{t('ResolvedOn')})",
             "item/ClosedOn": f"@if(and(not(equals({V},coalesce({t('LastNotifiedStatus')},''))),equals({V},'{S_CLOSED}')),utcNow(),{t('ClosedOn')})",
