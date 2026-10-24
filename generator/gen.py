@@ -756,6 +756,11 @@ def hd4():
     earlier = ("@{if(empty(coalesce(triggerOutputs()?['body/Conversation'],'')),'',concat('<p style=\"margin-top:18px\"><b>Ticket history</b></p>"
                "<div style=\"font-size:13px;color:#555;line-height:1.5\">'," + _hist + ",'</div>'))}")
     style = '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333">'
+    # Direct download links for whatever's attached to the ticket right now (fetched fresh each run via
+    # Get_attachments below, not from the trigger body, since an attachment can be added without touching
+    # Status/AssignedTo/NoteToUser). Folded into every note/status notification so the requester doesn't have
+    # to open the ticket just to find a file a tech attached.
+    files_html = f"@{{if(outputs('HasFiles'),concat('<p><b>Attached file(s):</b> ',join(body('FileLinks'),' &nbsp;&middot;&nbsp; '),'</p>'),'')}}"
 
     # Part B: a tech was assigned (runs first so Open -> Assigned feeds the status email)
     partB = seq([
@@ -787,11 +792,13 @@ def hd4():
         ("Send_note_on_its_own", cond(f"@equals({V},coalesce({t('LastNotifiedStatus')},''))", seq([
             ("Email_the_note", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Update on your ticket: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p><p>@{{{who}}} from IT wrote:</p><p>@{{{t('NoteToUser')}}}</p>"
+                + files_html +
                 f"<p>Reply to this email to answer.{portal_note}</p>" + details + earlier + "</div>")),
             ("Chat_the_note_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_the_note": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_note", "@outputs('ReqEmail')",
-                        f"<p><b>IT-@{{{ID}}}: message from @{{{who}}}</b></p><p>@{{{t('NoteToUser')}}}</p><p style=\"color:#666\">@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}}),
+                        f"<p><b>IT-@{{{ID}}}: message from @{{{who}}}</b></p><p>@{{{t('NoteToUser')}}}</p>" + files_html
+                        + f"<p style=\"color:#666\">@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}}),
                 "runAfter": ra("Email_the_note", status=("Succeeded", "Failed"))}),
             ("Note_in_channel", {**cond(f"@not(empty(coalesce({t('ChannelMessageId')},'')))", {
                 "Reply_note_in_channel": channel_reply(f"@{t('ChannelMessageId')}",
@@ -817,14 +824,15 @@ def hd4():
             ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{UV}}}: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
                 f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{UV}}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
-                + resolution_html + note_html + extra_html +
+                + resolution_html + note_html + files_html + extra_html +
                 portal_line + details + earlier + "</div>")),
             ("Chat_status_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_status": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_status", "@outputs('ReqEmail')",
                         f"<p><b>IT-@{{{ID}}} is now @{{{UV}}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
                         f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
-                        + resolution_html +
+                        + files_html +
+                        resolution_html +
                         f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
                         + support_links(ID, t('Title')))}}),
                 "runAfter": ra("Email_status", status=("Succeeded", "Failed"))}),
@@ -873,7 +881,17 @@ def hd4():
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
         ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
-        ("Close_guard", {"type": "Scope", "runAfter": {}, "actions": close_guard}),
+        # Fetched fresh (not from the trigger body) so a file attached separately from the edit that fired this
+        # run still shows up: attaching a file doesn't itself touch Status/AssignedTo/NoteToUser, so by the time
+        # HD4 runs for some other reason, any attachment already on the item is picked up and linked for the
+        # requester instead of sitting there unannounced.
+        ("Get_attachments", sp_http("GET", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/AttachmentFiles")),
+        ("HasFiles", {**compose("@greater(length(coalesce(body('Get_attachments')?['value'],json('[]'))),0)"),
+                      "runAfter": ra("Get_attachments", status=ALL)}),
+        ("FileLinks", {"type": "Select", "runAfter": ra("HasFiles", status=ALL), "inputs": {"from": "@body('Get_attachments')?['value']",
+            "select": "@concat('<a href=\"https://branthavenhomes.sharepoint.com',item()?['ServerRelativeUrl'],'\">',item()?['FileName'],'</a>')"}}),
+        # a failure fetching/attachments never blocks notifications or anything else below it
+        ("Close_guard", {"type": "Scope", "runAfter": ra("FileLinks", status=ALL), "actions": close_guard}),
         # A tech who resolves/closes a ticket straight from the SharePoint form usually forgets to assign it, so the
         # requester's email says "Not yet assigned". Teams Quick close assigns the responder; do the same here: if
         # the status just moved to Resolved/Closed with no assignee and the editor is a person (not the flow

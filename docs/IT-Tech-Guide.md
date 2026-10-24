@@ -15,6 +15,8 @@ Every new ticket then runs HD3: it sets permissions (the requester sees only the
 
 Every HD4 run (any note, status change, or resolution) also rewrites the Planner task's own **Notes** to the ticket title, a link, and the ticket's conversation history (capped at ~1800 characters) — so a tech reading the task in Planner sees the same notes and resolution text as the ticket itself, without opening SharePoint. It's a full rebuild each time, not an append, so nothing you type directly into the Planner task's notes will survive the next ticket update — put any notes on the ticket (Edit ticket / note box) instead.
 
+**Attaching a file to a ticket:** attaching it doesn't notify the requester by itself — attaching a file doesn't change Status, IT Assigned, or Note to requester, and only those trigger HD4. Put a line in **Note to requester** (even just "see attached file") so HD4 fires. When it does, HD4 now checks the ticket's attachments fresh each run and, if any exist, adds a direct download link for each one right in the email and Teams message — the requester doesn't need to open the ticket just to find the file.
+
 ## Your daily workflow
 
 1. Watch the **Help Desk channel** and the **Planner board** (buckets: New, In progress, Waiting, Done).
