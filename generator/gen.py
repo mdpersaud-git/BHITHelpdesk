@@ -1715,9 +1715,19 @@ def hd12():
                 # an explicit PRJ-n tag always wins over ticket matching (same precedence as HD1's email side) -
                 # the old code ran ticket matching unconditionally first, and its "exactly one open ticket" fallback
                 # (see "Ticket" above) would silently hijack a tagged project reply; see the comment above project_found.
+                #
+                # Structured as exactly ONE new If level here, not two: Project_or_tag_check's True branch picks
+                # between project_found/project_tag_notfound (shallow either way), and its False branch drops
+                # straight into not_found_or_followup at the SAME depth it sat at before this fix. An earlier
+                # version nested a second If (Has_explicit_project_tag) in front of not_found_or_followup, which
+                # pushed the pre-existing not_found/Any_open_tickets chain's deepest actions (Ask_which_msg*,
+                # Say_no_ticket_msg*) from level 8 to level 9 and failed Power Automate's import-time nesting-depth
+                # check ("...nested at level '9' which exceeds the maximum nesting limit of '8'") - found
+                # 2026-10-25 when Martin tried to import that build.
                 ("Ticket_found", cond(f"@and(equals(outputs('PrjRefNum'),0),not(empty({tk})))", found,
-                    {"Sponsor_project_found": cond(f"@not(empty({pr}))", project_found,
-                        {"Has_explicit_project_tag": cond("@greater(outputs('PrjRefNum'),0)", project_tag_notfound, not_found_or_followup)})})),
+                    {"Project_or_tag_check": cond(f"@or(not(empty({pr})),greater(outputs('PrjRefNum'),0))",
+                        {"Tag_project_resolved": cond(f"@not(empty({pr}))", project_found, project_tag_notfound)},
+                        not_found_or_followup)})),
             ]))),
         ]))),
     ])
