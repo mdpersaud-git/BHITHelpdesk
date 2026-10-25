@@ -19,6 +19,8 @@ Every HD4 run (any note, status change, or resolution) also rewrites the Planner
 
 Only *new* attachments get linked, not every file ever added to the ticket — a **NotifiedAttachments0** field (pipe-separated filenames, kept off every form and view) tracks what's already gone out, so the requester's own originally-submitted file doesn't get re-linked on every later update. It only advances when a note/status notification actually sends — a reassignment-only edit with no note won't mark a pending file as "seen." (It's `NotifiedAttachments0`, not `NotifiedAttachments` — see `CLAUDE.md` for why.)
 
+The one exception: the status email/Teams message sent when a ticket reaches **Resolved Pending Confirmation** or **Closed** lists *every* attachment on the ticket — whatever the requester originally sent plus whatever a tech added along the way — not just the ones not yet linked, since that's the message most likely to get kept or forwarded. Every other note or status change still only links new files.
+
 ## Your daily workflow
 
 1. Watch the **Help Desk channel** and the **Planner board** (buckets: New, In progress, Waiting, Done).

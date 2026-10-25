@@ -761,6 +761,16 @@ def hd4():
     # Status/AssignedTo/NoteToUser). Folded into every note/status notification so the requester doesn't have
     # to open the ticket just to find a file a tech attached.
     files_html = f"@{{if(outputs('HasFiles'),concat('<p><b>Attached file(s):</b> ',join(body('FileLinks'),' &nbsp;&middot;&nbsp; '),'</p>'),'')}}"
+    # On the final status (Resolved Pending Confirmation or Closed) — the one message a requester is most
+    # likely to keep or forward — list every attachment currently on the ticket, whatever the requester
+    # originally sent plus whatever a tech added, not just the ones not yet linked. Everywhere else (a note
+    # on its own, or an earlier status change) keep linking only new files via files_html above, so the same
+    # file isn't repeated on every single update. AllFileLinks (built below from every item in Get_attachments,
+    # unlike FileLinks which only covers New_attachments) backs the Resolved/Closed branch.
+    status_files_html = (f"@{{if(contains({arr([S_RES, S_CLOSED])},{V}),"
+                          f"if(greater(length(coalesce(body('Get_attachments')?['value'],json('[]'))),0),"
+                          f"concat('<p><b>Attachment(s):</b> ',join(body('AllFileLinks'),' &nbsp;&middot;&nbsp; '),'</p>'),''),"
+                          f"if(outputs('HasFiles'),concat('<p><b>Attached file(s):</b> ',join(body('FileLinks'),' &nbsp;&middot;&nbsp; '),'</p>'),''))}}")
     # True exactly when a note/status notification with files_html in it is actually going out this run — the
     # same two conditions that gate Email_the_note (note, same status) and Email_status (status changed, has a
     # requester email). Only then does Update_item roll NotifiedAttachments forward; otherwise a run with no
@@ -830,14 +840,14 @@ def hd4():
             ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{UV}}}: @{{{t('Title')}}}",
                 style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
                 f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{UV}}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
-                + resolution_html + note_html + files_html + extra_html +
+                + resolution_html + note_html + status_files_html + extra_html +
                 portal_line + details + earlier + "</div>")),
             ("Chat_status_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_status": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_status", "@outputs('ReqEmail')",
                         f"<p><b>IT-@{{{ID}}} is now @{{{UV}}}</b></p>@{{if(equals({V},'{S_CLOSED}'),'',concat('<p>',outputs('Meanings')?[{V}],'.</p>'))}}<p style=\"color:#666\">@{{{t('Title')}}}</p>"
                         f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
-                        + files_html +
+                        + status_files_html +
                         resolution_html +
                         f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
                         + support_links(ID, t('Title')))}}),
@@ -913,8 +923,13 @@ def hd4():
             "select": "@concat('<a href=\"https://branthavenhomes.sharepoint.com',item()?['ServerRelativeUrl'],'\">',item()?['FileName'],'</a>')"}}),
         ("AllFileNames", {"type": "Select", "runAfter": ra("FileLinks", status=ALL), "inputs": {
             "from": "@coalesce(body('Get_attachments')?['value'],json('[]'))", "select": "@item()?['FileName']"}}),
+        # Same link format as FileLinks, but over every attachment currently on the ticket (not just
+        # New_attachments) — backs status_files_html's Resolved/Closed branch above.
+        ("AllFileLinks", {"type": "Select", "runAfter": ra("AllFileNames", status=ALL), "inputs": {
+            "from": "@coalesce(body('Get_attachments')?['value'],json('[]'))",
+            "select": "@concat('<a href=\"https://branthavenhomes.sharepoint.com',item()?['ServerRelativeUrl'],'\">',item()?['FileName'],'</a>')"}}),
         # a failure fetching/attachments never blocks notifications or anything else below it
-        ("Close_guard", {"type": "Scope", "runAfter": ra("AllFileNames", status=ALL), "actions": close_guard}),
+        ("Close_guard", {"type": "Scope", "runAfter": ra("AllFileLinks", status=ALL), "actions": close_guard}),
         # A tech who resolves/closes a ticket straight from the SharePoint form usually forgets to assign it, so the
         # requester's email says "Not yet assigned". Teams Quick close assigns the responder; do the same here: if
         # the status just moved to Resolved/Closed with no assignee and the editor is a person (not the flow
