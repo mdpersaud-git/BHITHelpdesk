@@ -1683,7 +1683,7 @@ def hd15():
     PR3 = ["High", "Medium", "Low"]
     CAT13 = CATEGORIES
     conc1 = {"runtimeConfiguration": {"concurrency": {"repetitions": 1}}}
-    def chart(p, src, field, names, item_id, sub_total=None):
+    def chart(p, src, field, names, item_id, sub_total=None, title=None):
         key = f"item()?['{field}']?['Value']"
         if field == "Category":
             where = f"@or(equals({key},items('Foreach_{p}')),and(equals(items('Foreach_{p}'),'Uncategorized'),or(empty({key}),equals({key},'Uncategorised'))))"
@@ -1696,7 +1696,7 @@ def hd15():
             (f"Share_{p}", {"type": "AppendToArrayVariable", "inputs": {"name": "varShares", "value":
                 f"@float(formatNumber(div(mul(float(length(body('Count_{p}'))),100),float(max(length(body('{src}')),1))),'0.00'))"}}),
         ]), **conc1}
-        item = {"id": item_id, "item/Title": {"Status": "Status", "Priority": "Priority", "Category": "Category"}[field],
+        item = {"id": item_id, "item/Title": title or {"Status": "Status", "Priority": "Priority", "Category": "Category"}[field],
                 "item/Total": f"@length(body('{src}'))"}
         for i in range(max(14, len(names))):
             item[f"item/Slot{i+1}"] = f"@coalesce(variables('varLabels')?[{i}],'')"
@@ -1806,14 +1806,22 @@ def hd15():
             "where": f"@and(equals(item()?['Status']?['Value'],'{S_CLOSED}'),greaterOrEquals(ticks(coalesce(item()?['ClosedOn'],'1970-01-01T00:00:00Z')),{d30}))"}}),
         ("Created_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
             "where": f"@greaterOrEquals(ticks(item()?['Created']),{d30})"}}),
+        ("All_projects", spp("GetItems", {"$top": 5000})),
+        ("Projects_list", {"type": "Compose", "inputs": "@body('All_projects')?['value']"}),
+        ("Active_projects", {"type": "Query", "inputs": {"from": "@body('Projects_list')",
+            "where": "@" + " or ".join(f"equals(item()?['Status']?['Value'],'{s}')" for s in PRJ_ACTIVE)}}),
         ("Update_KPIs", sp("PatchItem", {"table": DASH, "id": 5, "item/Title": "KPIs",
             "item/OpenCount": "@length(body('Open_working'))", "item/Unassigned": "@length(body('Unassigned'))",
             "item/Overdue": "@length(body('Overdue'))", "item/Waiting": "@length(body('Waiting'))",
             "item/Pending": "@length(body('Pending'))", "item/Closed30": "@length(body('Closed_30'))",
+            "item/Projects": "@length(body('Active_projects'))",
             "item/Refreshed": f"@{nowET('h:mm tt')}"})),
         *chart("status", "Open_all", "Status", ST7, 2),
         *chart("priority", "Open_all", "Priority", PR3, 3),
         *chart("category", "Created_30", "Category", CAT13, 4),
+        *chart("pstatus", "Projects_list", "Status", PRJ_STATUSES, 11, title="ProjStatus"),
+        *chart("ppriority", "Projects_list", "Priority", PRIORITIES, 12, title="ProjPriority"),
+        *chart("pcategory", "Projects_list", "Category", PRJ_CATEGORIES, 13, title="ProjCategory"),
         ("Created_7", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
             "where": "@greaterOrEquals(ticks(item()?['Created']),ticks(addDays(utcNow(),-7)))"}}),
         *trend(),
@@ -1828,6 +1836,7 @@ def hd15():
     return "HD15 Dashboard stats", trig, acts
 
 DASH_TECHSLA = 15   # "TechSLA" row on the Live overview list, rendered by the "Chart - Tech SLA" view
+DASH_PROJHEALTH = 16   # "IT Project Systems" row on the Live overview list, rendered by the "Chart - ProjHealth" view
 def tech_sla():
     """Per-technician service levels over the last 30 days (tickets in Created_30, by assignee): ticket count, average
     first response (ResponseMinutes), % responded within 4h (ResponseMet) and % resolved within 24h (ResolvedMet).
@@ -1903,6 +1912,12 @@ EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "
                   "HD5 Planner task completed", "HD6 Hourly clock", "HD7 My open tickets", "HD8 Daily report",
                   "HD9 Card actions", "HD11 Tech thread replies", "HD12 Requester replies in Teams",
                   "HD15 Dashboard stats", "HD16 Health check v2", "HD18 Quick close (SharePoint)"]
+# IT Projects flows, checked separately from EXPECTED_FLOWS above - they get their own dashboard health bucket
+# (DASH_PROJHEALTH, "IT Project Systems") rather than folding into the aggregate "Flows" card/count.
+EXPECTED_PROJECT_FLOWS = ["HD19 Project created", "HD20 Project updated", "HD21 No-update check"]
+PROJECT_FLOW_LABELS = {"HD19 Project created": "New project emails (HD19)",
+                        "HD20 Project updated": "Project update emails (HD20)",
+                        "HD21 No-update check": "Weekly check-in (HD21)"}
 PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support account)", "Probe_Teams": "Teams",
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
@@ -1957,6 +1972,21 @@ def hd16():
         c = f"sub(length(split(outputs('FlowStr'),'{name}=Started')),1)"
         flow_terms.append(f"if(equals({c},1),'',concat('{name}',if(equals({c},0),' is off or missing; ',concat(' has ',string({c}),' copies on; '))))")
     flow_problems = "concat(" + ",".join(flow_terms) + ")"
+
+    # --- 2b. project flows: same "<name>=Started" check against EXPECTED_PROJECT_FLOWS, own dashboard bucket ---
+    proj_counts = [f"sub(length(split(outputs('FlowStr'),'{name}=Started')),1)" for name in EXPECTED_PROJECT_FLOWS]
+    proj_flow_fields = {}
+    for i, (name, c) in enumerate(zip(EXPECTED_PROJECT_FLOWS, proj_counts)):
+        proj_flow_fields[f"item/Slot{i+1}"] = PROJECT_FLOW_LABELS[name]
+        proj_flow_fields[f"item/Share{i+1}"] = f"@if(not(outputs('FlowsOk')),-1,if(equals({c},1),0,100))"
+        proj_flow_fields[f"item/Slot{i+4}"] = (f"@if(not(outputs('FlowsOk')),'could not list flows',"
+            f"if(equals({c},1),'on',if(equals({c},0),'off or missing',concat(string({c}),' copies on'))))")
+    proj_bad_terms = [f"if(and(outputs('FlowsOk'),not(equals({c},1))),1,0)" for c in proj_counts]
+    proj_issue_count = proj_bad_terms[0]
+    for t in proj_bad_terms[1:]:
+        proj_issue_count = f"add({proj_issue_count},{t})"
+    proj_problem_terms = [f"if(and(outputs('FlowsOk'),not(equals({c},1))),'{PROJECT_FLOW_LABELS[name]}; ','')"
+                           for name, c in zip(EXPECTED_PROJECT_FLOWS, proj_counts)]
 
     acts = seq([
         ("Previous", sp("GetItem", {"table": DASH, "id": DASH_HEALTH})),
@@ -2082,6 +2112,12 @@ def hd16():
             "item/Slot21": "@if(outputs('DashStale'),'charts not refreshed for 30 min',if(greater(length(body('Dash_rows')?['value']),0),concat('refreshed ',formatDateTime(convertTimeZone(first(body('Dash_rows')?['value'])?['Modified'],'UTC','" + TZ + "'),'h:mm tt')),'no data yet'))",
             "item/Slot10": f"@if(empty(coalesce({prev}?['Slot10'],'')),'no problems reported',{prev}?['Slot10'])",
             "item/Grad": "@outputs('Details')"})),
+        ("Update_project_health", sp("PatchItem", {"table": DASH, "id": DASH_PROJHEALTH, "item/Title": "ProjectHealth",
+            "item/Sub": "IT Project Systems", "item/Refreshed": f"@{nowET('h:mm tt')}",
+            "item/Total": f"@if(outputs('FlowsOk'),{proj_issue_count},-1)",
+            "item/Grad": "@if(not(outputs('FlowsOk')),'could not list flows',trim(concat(" +
+                ",".join(proj_problem_terms) + ")))",
+            **proj_flow_fields})),
         ("Report", compose(
             "@concat("
             "'<h3>Help desk health — ',if(equals(outputs('IssueCount'),0),'all clear','PROBLEMS FOUND'),'</h3>',"
