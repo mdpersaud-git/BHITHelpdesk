@@ -1564,6 +1564,16 @@ def hd11():
 # ---------- HD12 Requester replies in Teams (chat with the IT Support account) ----------
 def hd12():
     M = "outputs('Msg')"
+    # The WebhookChatMessageTrigger notification only carries IDs (subscriptionId, conversationId, messageId,
+    # resourceData.id/@odata.id) - no 'from' or 'body'. Microsoft Graph only sends that lite shape for chat
+    # messages unless the subscription is set up for encrypted rich notifications; the flow has to fetch the
+    # actual message itself. Found 2026-10-25 full-circle-testing the new sponsor-reply path: every recorded run
+    # in HD12's 28-day history short-circuited at "From a person" (always False) because M?['from'] was never
+    # present on the raw notification, so no inbound Teams reply - ticket or (new) project - had ever actually
+    # been processed. Fixed with a "Get message details" call (Teams connector GetMessageDetails, run as
+    # IT_Support so it can read any chat IT_Support is a member of) right after the trigger, keyed off the IDs
+    # the notification does carry; MD is that resolved message, used everywhere M's 'from'/'body' were assumed.
+    MD = "body('Get_message_details')"
     stamp = f"convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm')"
     tk = "outputs('Ticket')"
     TID = f"{tk}?['ID']"
@@ -1641,10 +1651,10 @@ def hd12():
             f"<p>Thanks, your update was added to <b>PRJ-@{{{PRID}}}: @{{{pr}?['Title']}}</b>.</p>")),
     ])
     person = seq([
-        ("Get_sender", op("shared_office365users", "UserProfile_V2", {"id": f"@{{{M}?['from']?['user']?['id']}}"})),
+        ("Get_sender", op("shared_office365users", "UserProfile_V2", {"id": f"@{{{MD}?['from']?['user']?['id']}}"})),
         ("SenderEmail", compose(f"@{sender}")),
         ("Not_IT_Support", cond(f"@not(equals(outputs('SenderEmail'),toLower('{SUPPORT}')))", seq([
-            ("Msg_to_text", op("shared_conversionservice", "HtmlToText", {"Content": f"@{{coalesce({M}?['body']?['content'],'')}}"})),
+            ("Msg_to_text", op("shared_conversionservice", "HtmlToText", {"Content": f"@{{coalesce({MD}?['body']?['content'],'')}}"})),
             ("ReplyText", compose("@trim(body('Msg_to_text'))")),
             ("Has_text", cond("@not(empty(outputs('ReplyText')))", seq([
                 ("Open_tickets", sp("GetItems", {"$filter": f"RequesterEmail eq '@{{outputs('SenderEmail')}}' and Status ne '{S_CLOSED}'",
@@ -1677,7 +1687,10 @@ def hd12():
     ])
     actions = seq([
         ("Msg", compose("@coalesce(triggerBody()?['value']?[0],triggerBody())")),
-        ("From_a_person", cond(f"@not(empty(coalesce({M}?['from']?['user']?['id'],'')))", person)),
+        ("Get_message_details", op("shared_teams_1", "GetMessageDetails", {
+            "messageId": f"@{{{M}?['messageId']}}", "threadType": "groupchat", "body/recipient": f"@{{{M}?['conversationId']}}"})),
+        ("From_a_person", {**cond(f"@not(empty(coalesce({MD}?['from']?['user']?['id'],'')))", person),
+            "runAfter": ra("Get_message_details", status=("Succeeded", "Failed"))}),
     ])
     trig = {"When_someone_messages_IT_Support": {"type": "OpenApiConnectionWebhook",
         "inputs": {"parameters": {},
