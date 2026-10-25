@@ -691,7 +691,9 @@ def hd3():
                 "value": "@concat('data:image/jpeg;base64,',base64(body('Get_photo')))"}}),
         ]))),
         ("Card", {**compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
-            f"substring(coalesce({t('Details')},''),0,min(length(coalesce({t('Details')},'')),400))", pic="@outputs('HasPic')",
+            # pad before substring: a ticket with no Details (e.g. one created without that field) leaves
+            # coalesce(Details,'') empty, and substring('',0,0) throws - see CLAUDE.md's substring gotcha.
+            f"substring(concat(coalesce({t('Details')},''),' '),0,min(length(coalesce({t('Details')},'')),400))", pic="@outputs('HasPic')",
             photo="variables('varPhoto')", req_name=f"coalesce({t('Requester/DisplayName')},outputs('ReqEmail'))")),
             "runAfter": ra("Requester_photo", status=("Succeeded", "Failed", "Skipped", "TimedOut"))}),
         ("Post_to_Help_Desk_channel", channel_card("@{string(outputs('Card'))}", card_type=CARD_TYPE)),
@@ -963,7 +965,9 @@ def hd4():
             "Update_task_notes": op("shared_planner", "UpdateTaskDetails_V2", {
                 "id": f"@{t('PlannerTaskId')}",
                 "body/description": f"@concat('IT-',{ID},': ',{t('Title')},decodeUriComponent('%0A'),'{LIST_URL}',"
-                    f"string({ID}),decodeUriComponent('%0A%0A'),substring(variables('varConversation'),0,"
+                    # padded before substring - varConversation stays at Init_varConversation's coalesce(Conversation,'')
+                    # when this run touched neither a note nor a status (e.g. just an attachment added), which can be empty
+                    f"string({ID}),decodeUriComponent('%0A%0A'),substring(concat(variables('varConversation'),' '),0,"
                     f"min(length(variables('varConversation')),1800)))"})}),
             "runAfter": ra("Part_C_status_changed", status=ALL)}),
         # ticks between the SLA start (7am rule) and the first response; 0 when there is no first response yet
@@ -1086,7 +1090,8 @@ def hd6():
                 ("Daily_reminder", cond(f"@and(equals(mod(outputs('W'),{DAY_H}),0),not(empty({req})))", seq([
                     ("Email_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: IT is waiting for your reply",
                         f"<p>{MARKER}</p><p>IT is waiting for your reply on IT-@{{{ID}}}: @{{{it('Title')}}}</p>"
-                        f"<pre>@{{substring(coalesce({it('Conversation')},''),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
+                        # padded before substring - an empty Conversation (no history yet) would otherwise throw
+                        f"<pre>@{{substring(concat(coalesce({it('Conversation')},''),' '),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
                         f"<p>Reply to this email to answer. The ticket will be marked Resolved after 5 days without a reply.</p>{rlnk}")),
                     ("Chat_reminder_if_internal", {**if_internal(internal, {
                         "Chat_reminder": {"type": "Scope", "runAfter": {},
