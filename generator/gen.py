@@ -1809,7 +1809,7 @@ def hd15():
         ("All_projects", spp("GetItems", {"$top": 5000})),
         ("Projects_list", {"type": "Compose", "inputs": "@body('All_projects')?['value']"}),
         ("Active_projects", {"type": "Query", "inputs": {"from": "@body('Projects_list')",
-            "where": "@" + " or ".join(f"equals(item()?['Status']?['Value'],'{s}')" for s in PRJ_ACTIVE)}}),
+            "where": "@or(" + ",".join(f"equals(item()?['Status']?['Value'],'{s}')" for s in PRJ_ACTIVE) + ")"}}),
         ("Update_KPIs", sp("PatchItem", {"table": DASH, "id": 5, "item/Title": "KPIs",
             "item/OpenCount": "@length(body('Open_working'))", "item/Unassigned": "@length(body('Unassigned'))",
             "item/Overdue": "@length(body('Overdue'))", "item/Waiting": "@length(body('Waiting'))",
