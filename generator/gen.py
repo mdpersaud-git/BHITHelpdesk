@@ -556,6 +556,42 @@ def hd1():
         ("Create_item", sp("PostItem", new_item)),
         ("Apply_to_each_3", attach_loop("@body('Create_item')?['ID']", None, "_3")),
     ])
+
+    # A reply to a [PRJ-n] project notification (HD19/HD20's "Reply to this email to add a note") lands here
+    # too, since both lists share the one shared-mailbox trigger. Only the project's Sponsor, Owner, creator or
+    # Martin may add a Sponsor Updates note this way; anyone else (or a PRJ-n that doesn't exist) alerts Martin
+    # instead of silently creating a bogus ticket titled after the project email.
+    gp = "body('Get_project')"
+    prj_auth = (f"or(equals(outputs('Sender'),toLower(coalesce({gp}?['ProjectSponsor']?['Email'],{gp}?['SponsorEmail'],''))),"
+                f"equals(outputs('Sender'),toLower(coalesce({gp}?['Owner']?['Email'],''))),"
+                f"equals(outputs('Sender'),toLower(coalesce({gp}?['Author']?['Email'],''))),"
+                f"equals(outputs('Sender'),'{ME}'))")
+    prj_stamp = f"convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm')"
+    project_reply_yes = seq([
+        ("Update_project", sp("PatchItem", {"table": PROJECTS, "id": "@outputs('PrjId')",
+            "item/Title": f"@{gp}?['Title']",
+            "item/SponsorUpdates": (f"@concat('[',{prj_stamp},' | ',outputs('Sender'),'] ',outputs('PrjReplyText'),"
+                                     f"decodeUriComponent('%0A%0A'),coalesce({gp}?['SponsorUpdates'],''))")})),
+    ])
+    project_reply_notfound = {
+        "Alert_bad_project_reply": {**mail(ME, "[Help desk health] Unmatched project reply",
+            f"<p>A reply naming PRJ-@{{outputs('PrjId')}} from @{{outputs('Sender')}} couldn't be matched to a "
+            f"project they're allowed to update (sponsor, owner, creator, or you). Subject: @{{{T}}}</p>"
+            f"<p>@{{outputs('PrjReplyText')}}</p>"), "runAfter": {}},
+        "Alert_bad_project_reply_teams": {"type": "Scope", "runAfter": ra("Alert_bad_project_reply", status=("Succeeded", "Failed")),
+            "actions": support_msg("Alert_bad_project_reply_dm", ME,
+                f"<p>A reply naming PRJ-@{{outputs('PrjId')}} from @{{outputs('Sender')}} couldn't be auto-matched. Check email for details.</p>")},
+    }
+    project_reply_branch = seq([
+        ("PrjId", compose(f"@if(contains(coalesce({T},''),'[PRJ-'),int(first(split(last(split({T},'[PRJ-')),']'))),outputs('PrjRefNum'))")),
+        ("PrjReplyText", compose("@" + clean_text(f"first(split(first(split(outputs('BodyText'),'{MARKER}')),'From: '))"))),
+        ("Get_project", sp("GetItem", {"table": PROJECTS, "id": "@outputs('PrjId')"})),
+        ("Project_found_and_authorized", cond(
+            f"@and(not(empty(string(coalesce({gp}?['ID'],'')))),{prj_auth})",
+            project_reply_yes, project_reply_notfound)),
+    ])
+    project_reply_branch["Project_found_and_authorized"]["runAfter"] = ra("Get_project", status=("Succeeded", "Failed"))
+
     actions = seq([
         ("Sender", compose("@toLower(trim(coalesce(triggerOutputs()?['body/from'],'')))")),
         ("SenderDomain", compose("@last(split(outputs('Sender'),'@'))")),
@@ -600,7 +636,16 @@ def hd1():
                            "if(not(contains('0123456789',substring(outputs('RefPart'),2,1))),2,"
                            "if(not(contains('0123456789',substring(outputs('RefPart'),3,1))),3,"
                            "if(not(contains('0123456789',substring(outputs('RefPart'),4,1))),4,5)))))))")),
-        ("Is_it_a_reply", cond(f"@or(contains(coalesce({T},''),'[IT-'),greater(outputs('RefNum'),0))", reply_branch, new_branch)),
+        # same safety net, for a reply that names a project instead of a ticket
+        ("PrjRefPart", compose(f"@concat(coalesce(split(toUpper(concat(coalesce({T},''),' ',coalesce(body('Html_to_text'),''))),'PRJ-')?[1],''),'     ')")),
+        ("PrjRefNum", compose("@if(not(contains('0123456789',substring(outputs('PrjRefPart'),0,1))),0,"
+                           "int(substring(outputs('PrjRefPart'),0,if(not(contains('0123456789',substring(outputs('PrjRefPart'),1,1))),1,"
+                           "if(not(contains('0123456789',substring(outputs('PrjRefPart'),2,1))),2,"
+                           "if(not(contains('0123456789',substring(outputs('PrjRefPart'),3,1))),3,"
+                           "if(not(contains('0123456789',substring(outputs('PrjRefPart'),4,1))),4,5)))))))")),
+        ("Is_project_or_ticket_reply", cond(
+            f"@or(contains(coalesce({T},''),'[PRJ-'),greater(outputs('PrjRefNum'),0))", project_reply_branch,
+            {"Is_it_a_reply": cond(f"@or(contains(coalesce({T},''),'[IT-'),greater(outputs('RefNum'),0))", reply_branch, new_branch)})),
         ("Move_to_Processed", move(F_PROCESSED)),
     ])
     trigger = {"When_a_new_email_arrives_in_a_shared_mailbox_(V2)": {
@@ -1584,6 +1629,17 @@ def hd12():
             f"<p>IT-@{{{ck}?['ID']}} was already resolved, so I started a new ticket for this: <b>IT-@{{body('Create_followup_item')?['ID']}}</b>.</p><p>@{{outputs('ReplyText')}}</p>")),
     ])
     not_found_or_followup = {"Check_closed_ticket": cond(f"@not(empty({ck}))", closed_followup, not_found)}
+    # No open ticket matched: before falling back to "I couldn't find an open ticket for you", check whether
+    # this sender is a Sponsor, Owner or creator on an IT Project - if so, treat their message as a Sponsor
+    # Updates note on that project instead (the Teams-side mirror of HD1's [PRJ-n] email-reply handling).
+    pr = "outputs('SponsorProject')"
+    PRID = f"{pr}?['ID']"
+    project_found = seq([
+        ("Update_sponsor_project", sp("PatchItem", {"table": PROJECTS, "id": f"@{PRID}", "item/Title": f"@{pr}?['Title']",
+            "item/SponsorUpdates": f"@concat('[',{stamp},' | ',{who},' (Teams)] ',outputs('ReplyText'),decodeUriComponent('%0A%0A'),coalesce({pr}?['SponsorUpdates'],''))"})),
+        ("Thank_sponsor", reply_here("Thank_sponsor",
+            f"<p>Thanks, your update was added to <b>PRJ-@{{{PRID}}}: @{{{pr}?['Title']}}</b>.</p>")),
+    ])
     person = seq([
         ("Get_sender", op("shared_office365users", "UserProfile_V2", {"id": f"@{{{M}?['from']?['user']?['id']}}"})),
         ("SenderEmail", compose(f"@{sender}")),
@@ -1608,7 +1664,14 @@ def hd12():
                 ("PendingFresh", compose("@if(and(not(empty(body('Get_pending')?['value'])),less(sub(ticks(utcNow()),ticks(first(body('Get_pending')?['value'])?['Created'])),864000000000)),first(body('Get_pending')?['value']),null)")),
                 ("IsBare", compose("@and(not(empty(outputs('Ticket'))),not(empty(outputs('PendingFresh'))),equals(replace(replace(replace(toUpper(outputs('ReplyText')),' ',''),'#',''),'.',''),concat('IT-',string(outputs('Ticket')?['ID']))))")),
                 ("FinalText", compose("@if(outputs('IsBare'),outputs('PendingFresh')?['ReplyText'],outputs('ReplyText'))")),
-                ("Ticket_found", cond(f"@not(empty({tk}))", found, not_found_or_followup)),
+                ("Sponsor_projects_raw", sp("GetItems", {"table": PROJECTS, "$orderby": "Modified desc", "$top": 200})),
+                ("Sponsor_projects", {"type": "Query", "inputs": {"from": "@body('Sponsor_projects_raw')?['value']",
+                    "where": ("@or(equals(toLower(coalesce(item()?['ProjectSponsor']?['Email'],item()?['SponsorEmail'],'')),outputs('SenderEmail')),"
+                              "equals(toLower(coalesce(item()?['Owner']?['Email'],'')),outputs('SenderEmail')),"
+                              "equals(toLower(coalesce(item()?['Author']?['Email'],'')),outputs('SenderEmail')))")}}),
+                ("SponsorProject", compose("@if(greater(length(body('Sponsor_projects')),0),first(body('Sponsor_projects')),null)")),
+                ("Ticket_found", cond(f"@not(empty({tk}))", found,
+                    {"Sponsor_project_found": cond(f"@not(empty({pr}))", project_found, not_found_or_followup)})),
             ]))),
         ]))),
     ])
