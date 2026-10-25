@@ -1807,7 +1807,7 @@ def hd15():
         ("Created_30", {"type": "Query", "inputs": {"from": "@body('All_tickets')?['value']",
             "where": f"@greaterOrEquals(ticks(item()?['Created']),{d30})"}}),
         ("All_projects", spp("GetItems", {"$top": 5000})),
-        ("Projects_list", {"type": "Compose", "inputs": "@body('All_projects')?['value']"}),
+        ("Projects_list", {"type": "Select", "inputs": {"from": "@body('All_projects')?['value']", "select": "@item()"}}),
         ("Active_projects", {"type": "Query", "inputs": {"from": "@body('Projects_list')",
             "where": "@or(" + ",".join(f"equals(item()?['Status']?['Value'],'{s}')" for s in PRJ_ACTIVE) + ")"}}),
         ("Update_KPIs", sp("PatchItem", {"table": DASH, "id": 5, "item/Title": "KPIs",
