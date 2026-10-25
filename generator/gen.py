@@ -1642,6 +1642,15 @@ def hd12():
     # No open ticket matched: before falling back to "I couldn't find an open ticket for you", check whether
     # this sender is a Sponsor, Owner or creator on an IT Project - if so, treat their message as a Sponsor
     # Updates note on that project instead (the Teams-side mirror of HD1's [PRJ-n] email-reply handling).
+    #
+    # Found 2026-10-25 full-circle-testing the sponsor-reply feature: a bare "[PRJ-2] ..." Teams reply got
+    # attached to the sender's one open ticket instead, because the old Ticket_found check always ran the
+    # existing ticket-matching logic first - and that logic's "exactly one open ticket" convenience fallback
+    # (see "Ticket" below) matched regardless of what the message actually said, silently overriding an explicit
+    # [PRJ-n] tag. Fixed the same way HD1 already handles it: an explicit PRJ- reference is checked before any
+    # ticket matching at all (PrjRefPart/PrjRefNum, mirroring HD1's own safety-net digit scan), and when present
+    # it routes straight to a lookup of that *specific* project (not just "any project this sender can update"),
+    # with its own not-found/not-authorized alert - never silently falls through to ticket matching.
     pr = "outputs('SponsorProject')"
     PRID = f"{pr}?['ID']"
     project_found = seq([
@@ -1649,6 +1658,14 @@ def hd12():
             "item/SponsorUpdates": f"@concat('[',{stamp},' | ',{who},' (Teams)] ',outputs('ReplyText'),decodeUriComponent('%0A%0A'),coalesce({pr}?['SponsorUpdates'],''))"})),
         ("Thank_sponsor", reply_here("Thank_sponsor",
             f"<p>Thanks, your update was added to <b>PRJ-@{{{PRID}}}: @{{{pr}?['Title']}}</b>.</p>")),
+    ])
+    project_tag_notfound = seq([
+        ("Tell_sender_project_tag_notfound", reply_here("Tell_sender_project_tag_notfound",
+            "<p>I couldn't match that to a project you're the sponsor, owner, or creator of. If you meant a ticket instead, "
+            "just reply with the ticket number (e.g. <b>IT-15</b>).</p>")),
+        ("Alert_bad_project_reply_teams", {**scope_msg("Alert_bad_prj_reply_dm", ME,
+            f"<p>A Teams reply naming PRJ-@{{outputs('PrjRefNum')}} from @{{{who}}} couldn't be matched to a project they're allowed to update.</p>"),
+            "runAfter": ra("Tell_sender_project_tag_notfound", status=("Succeeded", "Failed"))}),
     ])
     person = seq([
         ("Get_sender", op("shared_office365users", "UserProfile_V2", {"id": f"@{{{MD}?['from']?['user']?['id']}}"})),
@@ -1674,14 +1691,33 @@ def hd12():
                 ("PendingFresh", compose("@if(and(not(empty(body('Get_pending')?['value'])),less(sub(ticks(utcNow()),ticks(first(body('Get_pending')?['value'])?['Created'])),864000000000)),first(body('Get_pending')?['value']),null)")),
                 ("IsBare", compose("@and(not(empty(outputs('Ticket'))),not(empty(outputs('PendingFresh'))),equals(replace(replace(replace(toUpper(outputs('ReplyText')),' ',''),'#',''),'.',''),concat('IT-',string(outputs('Ticket')?['ID']))))")),
                 ("FinalText", compose("@if(outputs('IsBare'),outputs('PendingFresh')?['ReplyText'],outputs('ReplyText'))")),
+                # safety net: does the message explicitly name a project, e.g. "[PRJ-2] ..." - mirrors HD1's
+                # own PrjRefPart/PrjRefNum digit scan so a bracketed tag or a bare mention both work.
+                ("PrjRefPart", compose("@concat(coalesce(split(toUpper(outputs('ReplyText')),'PRJ-')?[1],''),'     ')")),
+                ("PrjRefNum", compose("@if(not(contains('0123456789',substring(outputs('PrjRefPart'),0,1))),0,"
+                                      "int(substring(outputs('PrjRefPart'),0,if(not(contains('0123456789',substring(outputs('PrjRefPart'),1,1))),1,"
+                                      "if(not(contains('0123456789',substring(outputs('PrjRefPart'),2,1))),2,"
+                                      "if(not(contains('0123456789',substring(outputs('PrjRefPart'),3,1))),3,"
+                                      "if(not(contains('0123456789',substring(outputs('PrjRefPart'),4,1))),4,5)))))))")),
                 ("Sponsor_projects_raw", sp("GetItems", {"table": PROJECTS, "$orderby": "Modified desc", "$top": 200})),
                 ("Sponsor_projects", {"type": "Query", "inputs": {"from": "@body('Sponsor_projects_raw')?['value']",
                     "where": ("@or(equals(toLower(coalesce(item()?['ProjectSponsor']?['Email'],item()?['SponsorEmail'],'')),outputs('SenderEmail')),"
                               "equals(toLower(coalesce(item()?['Owner']?['Email'],'')),outputs('SenderEmail')),"
                               "equals(toLower(coalesce(item()?['Author']?['Email'],'')),outputs('SenderEmail')))")}}),
-                ("SponsorProject", compose("@if(greater(length(body('Sponsor_projects')),0),first(body('Sponsor_projects')),null)")),
-                ("Ticket_found", cond(f"@not(empty({tk}))", found,
-                    {"Sponsor_project_found": cond(f"@not(empty({pr}))", project_found, not_found_or_followup)})),
+                # when a PRJ-n tag is present, match ONLY that specific project among the ones this sender is
+                # authorized on (never a different one); with no tag, keep the old "first project they can update" fallback
+                ("Tagged_sponsor_project", {"type": "Query", "inputs": {"from": "@body('Sponsor_projects')",
+                    "where": "@equals(item()?['ID'],outputs('PrjRefNum'))"}}),
+                ("SponsorProject", compose(
+                    "@if(greater(outputs('PrjRefNum'),0),"
+                    "if(greater(length(body('Tagged_sponsor_project')),0),first(body('Tagged_sponsor_project')),null),"
+                    "if(greater(length(body('Sponsor_projects')),0),first(body('Sponsor_projects')),null))")),
+                # an explicit PRJ-n tag always wins over ticket matching (same precedence as HD1's email side) -
+                # the old code ran ticket matching unconditionally first, and its "exactly one open ticket" fallback
+                # (see "Ticket" above) would silently hijack a tagged project reply; see the comment above project_found.
+                ("Ticket_found", cond(f"@and(equals(outputs('PrjRefNum'),0),not(empty({tk})))", found,
+                    {"Sponsor_project_found": cond(f"@not(empty({pr}))", project_found,
+                        {"Has_explicit_project_tag": cond("@greater(outputs('PrjRefNum'),0)", project_tag_notfound, not_found_or_followup)})})),
             ]))),
         ]))),
     ])
