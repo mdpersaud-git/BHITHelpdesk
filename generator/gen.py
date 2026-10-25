@@ -572,6 +572,13 @@ def hd1():
             "item/Title": f"@{gp}?['Title']",
             "item/SponsorUpdates": (f"@concat('[',{prj_stamp},' | ',outputs('Sender'),'] ',outputs('PrjReplyText'),"
                                      f"decodeUriComponent('%0A%0A'),coalesce({gp}?['SponsorUpdates'],''))")})),
+        # Confirm back to the sender, the email-side mirror of HD12's Teams "Thank_sponsor" reply - until this was
+        # added, a sponsor replying by email got no acknowledgment at all that their note was received (only the
+        # Teams-reply path did), unlike every other reply path in the system. Found 2026-10-25 when Martin asked
+        # for it after confirming the Teams side worked.
+        ("Thank_sponsor_email", mail("@outputs('Sender')",
+            f"[PRJ-@{{outputs('PrjId')}}] Update added: @{{{gp}?['Title']}}",
+            f"<p>Thanks, your update was added to <b>PRJ-@{{outputs('PrjId')}}: @{{{gp}?['Title']}}</b>.</p>")),
     ])
     project_reply_notfound = {
         "Alert_bad_project_reply": {**mail(ME, "[Help desk health] Unmatched project reply",
