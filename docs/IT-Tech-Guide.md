@@ -81,7 +81,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 | Card | What it checks | Red means |
 |---|---|---|
 | Connections | A read-only call through every connector each hour: Outlook (mailbox), Teams (channels), Teams as IT Support (joined teams), Planner (buckets), Office 365 Users, OneDrive, Power Automate Management; SharePoint is exercised by the ticket queries. Microsoft Forms has no read action and is **not** probed. | Names the broken connection — Power Automate › Connections › Reconnect, or recreate it (see "Emails stop but Teams messages still arrive" below) |
-| Flows | Power Automate Management "List My Flows": every expected flow (HD1–HD9, HD11, HD12, HD15, HD16 v2) is **on, exactly once**. HD13/HD17 (run-once) are not expected on; HD14 is owned by Martin's account so it is not visible to this check. | "HDx is off or missing" / "HDx has 2 copies on" — turn the right one on, delete the duplicate |
+| Flows | Power Automate Management "List My Flows": every expected flow (HD1–HD9, HD11, HD12, HD15, HD16 v2) is **on, exactly once**. HD13/HD17 (run-once) are not expected on; HD14 is owned by Martin's account so it is not visible to this check. HD19/HD20/HD21 (IT Projects) exist but are **not yet in this check's expected list** — check they're on by hand (My flows) until HD16 is updated to include them. | "HDx is off or missing" / "HDx has 2 copies on" — turn the right one on, delete the duplicate |
 | New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
 | Updates notified (HD4) | No ticket whose Status differs from LastNotifiedStatus for more than 30 min (the requester was never told) | HD4 is not running — check its run history and the SharePoint connection |
 | Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review; Microsoft/Power Automate system mail ignored); amber if mail landed in **Review** in the last 24 h (system mail ignored) | HD1 is not ticketing email |
@@ -99,6 +99,18 @@ Behind the panel, three layers of alerts all go to Martin (mpersaud@branthaven.c
 If an alert names a flow run, open the link: the failed step is highlighted in red with the full error.
 
 The panel's rendering is the JSON view formatting on the **Live overview** list's *Chart - Health* view (filtered to item 14). The source of truth is `dashboard/health-view.json` in the repo: paste it into the view via *Format current view → Advanced mode* whenever it changes. Column map: card n uses `Slot n` (name), `Slot n+14` (description) and `Share n` (0 OK / 50 amber / 100 red / −1 grey); `Total` = issue count, `Refreshed` = time shown, `Slot22` = time of the check in epoch ms, `Grad` = the problem band, `Slot10`/`Slot11` = last HD3/HD4 self-reported problem and its time.
+
+## IT Projects (project tracking)
+
+A separate list, **IT Projects** (same site, nav link next to Tickets), tracks longer-running work that isn't a single ticket — rollouts, infrastructure work, process changes. It has its own Status (`Not Started` / `In Progress` / `On Hold` / `Waiting on Vendor/Approval` / `Completed` / `Cancelled`) and Category (`Infrastructure` / `Security` / `Software Rollout` / `Network` / `Hardware Refresh` / `Process Improvement` / `Other`) choice columns — keep both lists in sync with `PRJ_STATUSES`/`PRJ_CATEGORIES` in `generator/gen.py` if either ever changes. "Active" for monitoring/staleness purposes means every status except Completed/Cancelled.
+
+Three flows run it, the same pattern as HD3/HD4/HD6 for tickets:
+
+- **HD19 Project created** — breaks permission inheritance on the new item (mirrors HD3): Owners get full control, and if a Sponsor is set they get Read. Emails and Teams-messages the creator, Martin, and the sponsor (if any). Stamps `LastNotifiedStatus`/`LastNotifiedSponsorLen`/`LastNotifiedInternalLen` so HD20 can tell what's already been told.
+- **HD20 Project updated** — a project has two note logs: **SponsorUpdates** (sponsor-facing — a status change or a new sponsor note) and **InternalNotes** (techs-only). A status change or a new SponsorUpdates note notifies the creator, Martin, *and* the sponsor; a new InternalNotes-only note notifies Martin and the project Owner alone — the sponsor never sees internal notes. Each note field is a prepended log, same convention as the ticket Conversation field; HD20 diffs the field length against `LastNotifiedSponsorLen`/`LastNotifiedInternalLen` to find just the newly-added text (not the whole log) for the notification, then restamps both lengths and `LastNotifiedStatus` at the end of every run.
+- **HD21 No-update check** — runs Fridays at 9am; finds every *active* project not modified in 7+ days and emails/Teams-messages the creator and Martin a nudge. No self-check (same as HD6 — it's a scheduled sweep, not a per-item flow).
+
+There's no sponsor-facing input yet — sponsors only *receive* email/Teams notifications; they have no form or portal to add their own update. That's planned as Phase 2 (a sponsor-reply flow and/or a Power Apps form, tentatively HD22/HD23) and hasn't been built.
 
 ## Reply to a closed ticket
 
@@ -142,7 +154,7 @@ Three more lists on the help desk site hold data end users shouldn't see, but �
 
 ## Flow reference
 
-HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Health check · HD17 Fix ticket permissions (run once) · HD18 Quick close (SharePoint) — the list button's flow; its ID goes into `dashboard/tickets-id-column.json` (`HD18_FLOW_ID`).
+HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated · HD5 Planner task completed · HD6 Clock · HD7 My open tickets · HD8 Daily report · HD9 Card actions · HD11 Tech thread replies · HD12 Requester replies in Teams · HD13 One-time setup of the pending-replies list · HD14 Teams app intake · HD15 Dashboard stats · HD16 Health check · HD17 Fix ticket permissions (run once) · HD18 Quick close (SharePoint) — the list button's flow; its ID goes into `dashboard/tickets-id-column.json` (`HD18_FLOW_ID`) · HD19 Project created · HD20 Project updated · HD21 No-update check (weekly, Fridays 9am) — see "IT Projects" above.
 
 *Flows are generated from `generator/gen.py`. Never edit the live flows directly without updating the generator.*
 
@@ -158,6 +170,7 @@ Live flow IDs (environment Default-26e851a0…, rebuilt 2026-10-21 after the Out
 | HD6 Hourly clock | 964cba3d | HD15 Dashboard stats | bd04cabb |
 | HD7 My open tickets | 7172c1c0 | HD16 Health check v2 | da2f43b4 (old HD16 482dc407 kept off as rollback) |
 | HD8 Daily report | 3c9907f7 | HD17 Fix ticket permissions (off) | 1a62b6b6 |
-| HD18 Quick close (SharePoint) | 0d643975 (its full ID is in `dashboard/tickets-id-column.json`) | | |
+| HD18 Quick close (SharePoint) | 0d643975 (its full ID is in `dashboard/tickets-id-column.json`) | HD20 Project updated | e5d3bcee |
+| HD19 Project created | b4d90357 | HD21 No-update check | acc884cc |
 
 **Why HD14 is not in "My flows":** HD14 was created on 2026-10-10 under Martin's own account, with IT Support added as co-owner. "My flows" only lists flows whose *primary owner* is the signed-in account, so when working as IT_Support, HD14 appears under **Shared with me** instead. It is the only flow like this; every other flow was imported as IT_Support. The Teams app calls HD14 by its ID (4bede0e5…), so a copy of HD14 imported as IT_Support is *not* used by the app — delete any such spare, or re-point the app's Send button at it in Power Apps Studio if you want HD14 owned by IT_Support like the rest.

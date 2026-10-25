@@ -4,6 +4,13 @@ OUT = os.path.join(os.path.dirname(__file__), 'out')
 SITE = "https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2"
 ENV = "Default-26e851a0-5d3b-4687-80a3-7d758c6fc2b2"   # Power Automate environment (for links in alerts)
 TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
+PROJECTS = "3de1b401-4cac-4994-9c43-0d7cdd464b47"   # "IT Projects" list, added 2026-10-25
+PRJ_LIST_URL = SITE + "/Lists/IT%20Projects/Full%20Detail.aspx?FilterField1=ID&FilterValue1="   # tech view
+PRJ_ITEM_URL = SITE + "/Lists/IT%20Projects/DispForm.aspx?ID="   # read-only item page (also used by the sponsor for now)
+PRJ_STATUSES = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Approval", "Completed", "Cancelled"]
+PRJ_ACTIVE = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Approval"]   # not Completed/Cancelled
+PRJ_CATEGORIES = ["Infrastructure", "Security", "Software Rollout", "Network", "Hardware Refresh", "Process Improvement", "Other"]
+# keep PRJ_STATUSES/PRJ_CATEGORIES in sync with: the IT Projects list's Status/Category choice columns
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
 EXTERNAL_SENDERS = "37b12028-370c-4b21-b31c-11362129c7fe"   # "External Senders" allow-list: Title = domain or full address
 MBX = "IT_Support@branthaven.com"
@@ -363,13 +370,19 @@ def recurrence(hours, days=WEEKDAYS):
         "schedule": {"weekDays": days,
                      "hours": [str(h) for h in hours], "minutes": [0]}}}
 
-def sp_trigger(opid):
+def sp_trigger(opid, table=TICKETS):
     return {"recurrence": {"frequency": "Minute", "interval": 1},
             "splitOn": "@triggerOutputs()?['body/value']", "type": "OpenApiConnection",
-            "inputs": {"parameters": {"dataset": SITE, "table": TICKETS},
+            "inputs": {"parameters": {"dataset": SITE, "table": table},
                        "host": {"apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
                                 "connectionName": "shared_sharepointonline", "operationId": opid},
                        "authentication": "@parameters('$authentication')"}}
+
+def spp(opid, params, after=None):
+    """Like sp(), but against the IT Projects list instead of Tickets."""
+    p = dict(params)
+    p["table"] = PROJECTS
+    return sp(opid, p, after)
 
 def forms_trigger(form):
     return {"splitOn": "@triggerOutputs()?['body/value']", "type": "OpenApiConnectionWebhook",
@@ -2196,6 +2209,205 @@ def hd18():
     ])
     return "HD18 Quick close (SharePoint)", trig, acts
 
+# ---------- HD19 Project created ----------
+def hd19():
+    """Fires when a project is added to the IT Projects list (entered directly in SharePoint by Martin or a
+    tech). Breaks the new item's permission inheritance exactly as HD3 does for tickets - Owners full control,
+    the Project Sponsor Read on just that one item, nothing else on the list - then emails + Teams-messages the
+    creator, Martin and the sponsor. Stamps LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen so
+    HD20 has a clean baseline to compare against on the next edit."""
+    pt = lambda k: f"triggerOutputs()?['body/{k}']"
+    ID = pt('ID')
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+    actions = seq([
+        ("CreatorEmail", compose(f"@toLower(coalesce({pt('Author/Email')},''))")),
+        ("SponsorEmail", compose(f"@toLower(coalesce({pt('ProjectSponsor/Email')},{pt('SponsorEmail')},''))")),
+        ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
+        ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
+        ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Has_sponsor", cond("@not(empty(outputs('SponsorEmail')))", seq([
+            ("Ensure_sponsor", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('SponsorEmail')}\"}")),
+            ("Give_sponsor_read", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_sponsor')?['Id']}},roledefid=1073741826)")),
+        ]), after=ra("Give_owners_full_control"))),
+        ("Send_created_email", {**mail("@outputs('Recipients')",
+            f"[PRJ-@{{{ID}}}] New project: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            "<p>A new IT project has been created.</p>"
+            f"<p><b>PROJECT:</b> PRJ-@{{{ID}}}: @{{{pt('Title')}}}<br>"
+            f"<b>STATUS:</b> @{{{pt('Status/Value')}}}<br>"
+            f"<b>PRIORITY:</b> @{{{pt('Priority/Value')}}}<br>"
+            f"<b>OWNER:</b> @{{coalesce({pt('Owner/DisplayName')},'Not yet assigned')}}<br>"
+            f"<b>SPONSOR:</b> @{{coalesce({pt('ProjectSponsor/DisplayName')},'None')}}<br>"
+            f"<b>TARGET DATE:</b> @{{if(empty(coalesce({pt('TargetDate')},'')),'Not set',formatDateTime({pt('TargetDate')},'MMMM d, yyyy'))}}</p>"
+            f"<p>@{{coalesce({pt('Description')},'')}}</p>"
+            f"<p><a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a></p></div>"),
+            "runAfter": ra("Recipients")}),
+        ("Recipients", {**compose(
+            "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
+            f"union(createArray('{ME}'),if(empty(outputs('SponsorEmail')),json('[]'),createArray(outputs('SponsorEmail'))))),';')"),
+            "runAfter": ra("Has_sponsor", status=("Succeeded", "Failed", "Skipped"))}),
+        ("Martin_new_project", {**scope_msg("Martin_new_project_msg",
+            ME, f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>Status: @{{{pt('Status/Value')}}} · Owner: @{{coalesce({pt('Owner/DisplayName')},'Not yet assigned')}}</p>"),
+            "runAfter": ra("Send_created_email", status=("Succeeded", "Failed"))}),
+        ("Tell_creator", {**cond(tell_cond("CreatorEmail"),
+            {"Creator_new_project": scope_msg("Creator_new_project_msg", "@outputs('CreatorEmail')",
+                f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>")}),
+            "runAfter": ra("Martin_new_project", status=("Succeeded", "Failed"))}),
+        ("Tell_sponsor", {**cond(
+            f"@and(not(empty(outputs('SponsorEmail'))),not(equals(outputs('SponsorEmail'),'{ME}')),"
+            "not(equals(outputs('SponsorEmail'),outputs('CreatorEmail')))," + is_internal("outputs('SponsorEmail')") + ")",
+            {"Sponsor_new_project": scope_msg("Sponsor_new_project_msg", "@outputs('SponsorEmail')",
+                f"<p><b>A new IT project lists you as sponsor: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>")}),
+            "runAfter": ra("Tell_creator", status=("Succeeded", "Failed"))}),
+        ("Update_item", {**spp("PatchItem", {
+            "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
+            "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
+            "item/LastNotifiedSponsorLen": f"@length(coalesce({pt('SponsorUpdates')},''))",
+            "item/LastNotifiedInternalLen": f"@length(coalesce({pt('InternalNotes')},''))"}),
+            "runAfter": ra("Tell_sponsor", status=("Succeeded", "Failed"))}),
+    ])
+    actions.update(self_check("Health", ["Has_sponsor", "Tell_creator", "Tell_sponsor"],
+        f"[Help desk health] HD19 problem on a new project",
+        f"Project <b>PRJ-@{{{ID}}}</b> (@{{{pt('Title')}}}) was created, but these steps did not complete:",
+        f"concat('PRJ-',{ID},' (created)')",
+        leaf=("Break_inheritance", "Give_owners_full_control", "Send_created_email", "Martin_new_project",
+              "Creator_new_project", "Sponsor_new_project"),
+        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
+    return "HD19 Project created", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJECTS)}, actions
+
+# ---------- HD20 Project updated ----------
+def hd20():
+    """Fires on every create/edit of an IT Projects item. Compares the current Status and the length of the two
+    running note logs (Sponsor Updates, Internal Notes) against what was notified last time
+    (LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen - stamped by HD19 on creation and by this
+    flow at the end of every run) to find what's actually new; a plain re-trigger off its own Update_item write
+    (see CLAUDE.md) finds nothing changed and exits quietly, same as HD4 already relies on for tickets.
+    A Status change or a new Sponsor Updates entry notifies the project's creator, Martin and the Project
+    Sponsor (email + Teams). A new Internal Notes entry notifies only Martin and the project's Owner - never the
+    sponsor, and never the creator unless they are also the Owner."""
+    pt = lambda k: f"triggerOutputs()?['body/{k}']"
+    ID = pt('ID')
+    V = pt('Status/Value')
+    status_changed = f"not(equals({V},coalesce({pt('LastNotifiedStatus')},'')))"
+    sponsor_len = f"length(coalesce({pt('SponsorUpdates')},''))"
+    sponsor_changed = f"greater({sponsor_len},coalesce({pt('LastNotifiedSponsorLen')},0))"
+    internal_len = f"length(coalesce({pt('InternalNotes')},''))"
+    internal_changed = f"greater({internal_len},coalesce({pt('LastNotifiedInternalLen')},0))"
+    # the two note logs are prepended with newest-first (same convention as Tickets' Conversation), so the text
+    # added since the last notification is just the leading slice the log grew by. substring()'s base string is
+    # padded with a trailing space first (per CLAUDE.md) - SponsorUpdates/InternalNotes can be empty, and
+    # substring('',0,0) throws "start index must be less than the length of the string" in Power Automate.
+    # LastNotifiedSponsorLen/LastNotifiedInternalLen are SharePoint Number columns, which the REST API always
+    # returns as a float/double even for whole numbers - coalesce()/sub()/max()/min() then silently widen the
+    # whole expression to Float, and substring()'s length parameter rejects a Float with InvalidTemplate ("the
+    # provided value is of type 'Float'"). Found 2026-10-25 full-circle-testing HD20's Internal Notes path (the
+    # Sponsor Updates path didn't surface it because NoteLine's enclosing if() short-circuits the untaken
+    # branch, so the same bug was latent there too). Fixed by wrapping the whole length expression in int(...).
+    _SP = f"coalesce({pt('SponsorUpdates')},'')"
+    _IN = f"coalesce({pt('InternalNotes')},'')"
+    new_sponsor_text = f"substring(concat({_SP},' '),0,int(min({sponsor_len},max(0,sub({sponsor_len},coalesce({pt('LastNotifiedSponsorLen')},0))))))"
+    new_internal_text = f"substring(concat({_IN},' '),0,int(min({internal_len},max(0,sub({internal_len},coalesce({pt('LastNotifiedInternalLen')},0))))))"
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+
+    sponsor_branch = seq([
+        ("StatusLine", compose(f"@if({status_changed},concat('<p><b>Status changed to: ',{V},'</b></p>'),'')")),
+        ("NoteLine", {**compose(f"@if({sponsor_changed},concat('<p>',{new_sponsor_text},'</p>'),'')"), "runAfter": ra("StatusLine")}),
+        ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("NoteLine")}),
+        ("SponsorEmail", {**compose(f"@toLower(coalesce({pt('ProjectSponsor/Email')},{pt('SponsorEmail')},''))"), "runAfter": ra("CreatorEmail")}),
+        ("Recipients", {**compose(
+            "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
+            f"union(createArray('{ME}'),if(empty(outputs('SponsorEmail')),json('[]'),createArray(outputs('SponsorEmail'))))),';')"),
+            "runAfter": ra("SponsorEmail")}),
+        ("Email_sponsor_update", {**mail("@outputs('Recipients')", f"[PRJ-@{{{ID}}}] Update on project: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>{MARKER}</p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"
+            f"<p>Reply to this email to add a note.</p><p><a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a></p></div>"),
+            "runAfter": ra("Recipients")}),
+        ("Martin_sponsor_update", {**scope_msg("Martin_sponsor_update_msg", ME,
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"),
+            "runAfter": ra("Email_sponsor_update", status=("Succeeded", "Failed"))}),
+        ("Tell_creator_sponsor_update", {**cond(tell_cond("CreatorEmail"),
+            {"Creator_sponsor_update": scope_msg("Creator_sponsor_update_msg", "@outputs('CreatorEmail')",
+                f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}")}),
+            "runAfter": ra("Martin_sponsor_update", status=("Succeeded", "Failed"))}),
+        ("Tell_sponsor_update", {**cond(
+            f"@and(not(empty(outputs('SponsorEmail'))),not(equals(outputs('SponsorEmail'),'{ME}')),"
+            "not(equals(outputs('SponsorEmail'),outputs('CreatorEmail')))," + is_internal("outputs('SponsorEmail')") + ")",
+            {"Sponsor_update": scope_msg("Sponsor_update_msg", "@outputs('SponsorEmail')",
+                f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}")}),
+            "runAfter": ra("Tell_creator_sponsor_update", status=("Succeeded", "Failed"))}),
+    ])
+    internal_branch = seq([
+        ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
+        ("OwnerEmail", {**compose(f"@toLower(coalesce({pt('Owner/Email')},''))"), "runAfter": ra("InternalLine")}),
+        ("Email_internal_update", {**mail(
+            f"@join(union(createArray('{ME}'),if(empty(outputs('OwnerEmail')),json('[]'),createArray(outputs('OwnerEmail')))),';')",
+            f"[PRJ-@{{{ID}}}] Internal note: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>{MARKER}</p>@{{outputs('InternalLine')}}<p><a href=\"{PRJ_LIST_URL}@{{{ID}}}\">View in Full Detail</a></p></div>"),
+            "runAfter": ra("OwnerEmail")}),
+        ("Martin_internal_update", {**scope_msg("Martin_internal_update_msg", ME,
+            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}"),
+            "runAfter": ra("Email_internal_update", status=("Succeeded", "Failed"))}),
+        ("Tell_owner_internal_update", {**cond(tell_cond("OwnerEmail"),
+            {"Owner_internal_update": scope_msg("Owner_internal_update_msg", "@outputs('OwnerEmail')",
+                f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}")}),
+            "runAfter": ra("Martin_internal_update", status=("Succeeded", "Failed"))}),
+    ])
+    actions = seq([
+        ("Sponsor_facing_change", cond(f"@or({status_changed},{sponsor_changed})", sponsor_branch)),
+        ("Internal_only_change", {**cond(f"@{internal_changed}", internal_branch),
+            "runAfter": ra("Sponsor_facing_change", status=("Succeeded", "Failed", "Skipped"))}),
+        ("Update_item", {**spp("PatchItem", {
+            "id": f"@{ID}", "item/Title": f"@{pt('Title')}", "item/LastNotifiedStatus": f"@{V}",
+            "item/LastNotifiedSponsorLen": f"@{sponsor_len}", "item/LastNotifiedInternalLen": f"@{internal_len}"}),
+            "runAfter": ra("Internal_only_change", status=("Succeeded", "Failed", "Skipped"))}),
+    ])
+    actions.update(self_check("Health", ["Sponsor_facing_change", "Internal_only_change"],
+        f"[Help desk health] HD20 problem on project update",
+        f"Project <b>PRJ-@{{{ID}}}</b> (@{{{pt('Title')}}}) was updated, but these steps did not complete:",
+        f"concat('PRJ-',{ID},' (updated)')",
+        leaf=("Email_sponsor_update", "Martin_sponsor_update", "Creator_sponsor_update", "Sponsor_update",
+              "Email_internal_update", "Martin_internal_update", "Owner_internal_update"),
+        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
+    return "HD20 Project updated", {"When_an_item_is_created_or_modified": sp_trigger("GetOnUpdatedItems", PROJECTS)}, actions
+
+# ---------- HD21 No-update check ----------
+def hd21():
+    """Runs once a week, Friday at 9am. Every active (not Completed/Cancelled) project whose Modified date is
+    more than 7 days old - meaning nothing, not a status change, a sponsor update or an internal note, has
+    touched it in a week, since every one of those writes also updates Modified - gets one email + Teams
+    message to its creator and Martin asking for a status update."""
+    it = lambda k: f"items('Apply_to_each')?['{k}']"
+    ID = it('ID')
+    status_expr = f"{it('Status')}?['Value']"
+    lnk = f"<a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a>"
+    body_html = (f"<p>PRJ-@{{{ID}}}: @{{{it('Title')}}} hasn't had a status change or a new note in over a week"
+                 f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
+                 f"<p>Status: @{{{status_expr}}}</p><p>{lnk}</p>")
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+    loop_actions = seq([
+        ("CreatorEmail", compose(f"@toLower(coalesce({it('Author')}?['Email'],''))")),
+        ("Email_creator", {**mail("@outputs('CreatorEmail')", f"[PRJ-@{{{ID}}}] Status update needed: @{{{it('Title')}}}", body_html),
+            "runAfter": ra("CreatorEmail")}),
+        ("Tell_creator_no_update", {**cond(tell_cond("CreatorEmail"),
+            {"Creator_no_update": scope_msg("Creator_no_update_msg", "@outputs('CreatorEmail')", body_html)}),
+            "runAfter": ra("Email_creator", status=("Succeeded", "Failed"))}),
+        ("Tell_martin_no_update", {**scope_msg("Martin_no_update", ME, body_html),
+            "runAfter": ra("Tell_creator_no_update", status=("Succeeded", "Failed", "Skipped"))}),
+    ])
+    loop = {"type": "Foreach", "foreach": "@body('Get_stale_projects')?['value']", "actions": loop_actions}
+    actions = seq([
+        ("Get_stale_projects", spp("GetItems", {
+            "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ") and Modified lt '@{addDays(utcNow(),-7)}'",
+            "$top": 200})),
+        ("Apply_to_each", loop),
+    ])
+    return "HD21 No-update check", {"Recurrence": recurrence([9], ["Friday"])}, actions
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -2255,7 +2467,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
