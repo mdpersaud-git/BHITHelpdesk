@@ -2372,7 +2372,16 @@ def hd20():
         leaf=("Email_sponsor_update", "Martin_sponsor_update", "Creator_sponsor_update", "Sponsor_update",
               "Email_internal_update", "Martin_internal_update", "Owner_internal_update"),
         after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
-    return "HD20 Project updated", {"When_an_item_is_created_or_modified": sp_trigger("GetOnUpdatedItems", PROJECTS)}, actions
+    # Without a trigger-level condition, Update_item's own PATCH (it runs unconditionally, even when nothing
+    # changed, to keep LastNotified* in sync) bumps the item's Modified date like any other edit, re-firing this
+    # same trigger - which then finds status_changed/sponsor_changed/internal_changed all false and does nothing
+    # but patch the identical values again, which bumps Modified again... an infinite ~1/min self-retrigger loop
+    # that never sends a duplicate notification but never stops either. HD4 avoids exactly this with a trigger
+    # condition (see its trig["conditions"] below); HD20 was missing the equivalent. Found 2026-10-25 full-circle
+    # testing: a test project kept re-triggering HD20 every ~30-40s for 10+ minutes after one note was saved.
+    trig = sp_trigger("GetOnUpdatedItems", PROJECTS)
+    trig["conditions"] = [{"expression": f"@or({status_changed},{sponsor_changed},{internal_changed})"}]
+    return "HD20 Project updated", {"When_an_item_is_created_or_modified": trig}, actions
 
 # ---------- HD21 No-update check ----------
 def hd21():
