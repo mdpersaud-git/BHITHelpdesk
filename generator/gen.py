@@ -150,6 +150,57 @@ def team_msgs(prefix, html, team):
     The outer Scope name must differ from the inner message-action name (support_msg names
     its post action literally `prefix`), or Logic Apps rejects the flow for duplicate names."""
     return {f"Tell_{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
+
+# ---------- multi-value Person-field helpers (IT Projects Owner / Project Sponsor) ----------
+# Both columns now allow multiple people. The SharePoint connector flattens a multi-value Person field
+# into an array of objects shaped like its single-value form (Email, DisplayName, Claims, ...) - the same
+# Email/DisplayName keys the existing singular code already reads (pt('Owner/Email') etc.), just
+# array-wrapped. These helpers build the join/membership expressions used against that array, plus (for
+# Project Sponsor only) a plain-text SponsorEmail fallback column kept from before the field supported
+# multiple people.
+def people_emails_csv(expr, fallback_single=None):
+    """`;`-joined, lower-cased, de-duplicated emails from a multi-value Person array expression (no
+    leading @); '' when there are none. `fallback_single`, if given, is a plain-text email expression
+    used only when the array is empty (legacy single-email field)."""
+    joined = f"join(union(select(coalesce({expr},json('[]')),toLower(coalesce(item()?['Email'],'')))),';')"
+    if fallback_single:
+        return f"if(empty({joined}),toLower(coalesce({fallback_single},'')),{joined})"
+    return joined
+
+def people_names_csv(expr, empty_text):
+    """Comma-joined display names from a multi-value Person array expression (no leading @);
+    `empty_text` (e.g. 'Not yet assigned') when there are none."""
+    joined = f"join(select(coalesce({expr},json('[]')),coalesce(item()?['DisplayName'],'')),', ')"
+    return f"if(empty(coalesce({expr},json('[]'))),'{empty_text}',{joined})"
+
+def people_contains(expr, email_expr):
+    """True if the lower-cased `email_expr` (no leading @) is one of the Emails in a multi-value Person
+    array expression (no leading @)."""
+    return f"contains(select(coalesce({expr},json('[]')),toLower(coalesce(item()?['Email'],''))),{email_expr})"
+
+def notify_each(prefix, csv_expr, html, exclude=()):
+    """1:1-message every non-empty, internal, non-excluded address in a `;`-joined email string
+    (`csv_expr`, no leading @ - typically from people_emails_csv). `exclude` is a list of expressions
+    (no leading @, already lower-cased, e.g. outputs('CreatorEmail')) to skip, so someone who is both the
+    creator and a sponsor isn't messaged twice. Returns {name: action} with one Scope named `prefix`
+    wrapping a Foreach, so self_check's `result('{prefix}')` sees pass/fail the same way it already does
+    for a plain Scope (Foreach does not add to CLAUDE.md's If/Switch/Foreach nesting cap - a Scope never
+    does, and this Foreach sits at just one level)."""
+    who = f"{prefix}_who"
+    skip = "".join(f",not(equals(outputs('{who}'),{e}))" for e in exclude)
+    return {prefix: {"type": "Scope", "runAfter": {}, "actions": {
+        f"{prefix}_loop": {"type": "Foreach", "runAfter": {}, "foreach": f"@split({csv_expr},';')",
+            "actions": seq([
+                (who, compose("@trim(item())")),
+                (f"{prefix}_check", cond(
+                    f"@and(not(empty(outputs('{who}'))),not(equals(outputs('{who}'),'{ME}')){skip}," +
+                    is_internal(f"outputs('{who}')") + ")",
+                    # the If's branch key (f"{prefix}_notify") must differ from scope_msg's own prefix
+                    # (f"{prefix}_msg", which names its inner post action literally that), per team_msgs'
+                    # duplicate-name warning above.
+                    {f"{prefix}_notify": scope_msg(f"{prefix}_msg", f"@outputs('{who}')", html)})),
+            ])},
+    }}}
 RUN_LINK = ("https://make.powerautomate.com/environments/@{workflow()?['tags']?['environmentName']}"
             "/flows/@{workflow()?['name']}/runs/@{workflow()?['run']?['name']}")
 
@@ -562,10 +613,16 @@ def hd1():
     # Martin may add a Sponsor Updates note this way; anyone else (or a PRJ-n that doesn't exist) alerts Martin
     # instead of silently creating a bogus ticket titled after the project email.
     gp = "body('Get_project')"
-    prj_auth = (f"or(equals(outputs('Sender'),toLower(coalesce({gp}?['ProjectSponsor']?['Email'],{gp}?['SponsorEmail'],''))),"
-                f"equals(outputs('Sender'),toLower(coalesce({gp}?['Owner']?['Email'],''))),"
-                f"equals(outputs('Sender'),toLower(coalesce({gp}?['Author']?['Email'],''))),"
-                f"equals(outputs('Sender'),'{ME}'))")
+    sponsor_arr, owner_arr, sender = gp + "?['ProjectSponsor']", gp + "?['Owner']", "outputs('Sender')"
+    # Owner and Project Sponsor both allow multiple people - the SharePoint "Get item" action exposes a
+    # multi-value Person field as an array of {Email,DisplayName,...} items (see hd19()'s docstring), so
+    # membership is an exact-match array check (people_contains), not a single ?['Email'] lookup. SponsorEmail
+    # is the legacy plain-text fallback, checked only when no Project Sponsor person is set.
+    prj_auth = (f"or({people_contains(sponsor_arr, sender)},"
+                f"equals({sender},toLower(coalesce({gp}?['SponsorEmail'],''))),"
+                f"{people_contains(owner_arr, sender)},"
+                f"equals({sender},toLower(coalesce({gp}?['Author']?['Email'],''))),"
+                f"equals({sender},'{ME}'))")
     prj_stamp = f"convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm')"
     project_reply_yes = seq([
         ("Update_project", sp("PatchItem", {"table": PROJECTS, "id": "@outputs('PrjId')",
@@ -1707,9 +1764,17 @@ def hd12():
                                       "if(not(contains('0123456789',substring(outputs('PrjRefPart'),3,1))),3,"
                                       "if(not(contains('0123456789',substring(outputs('PrjRefPart'),4,1))),4,5)))))))")),
                 ("Sponsor_projects_raw", sp("GetItems", {"table": PROJECTS, "$orderby": "Modified desc", "$top": 200})),
+                # Owner and Project Sponsor both allow multiple people (see hd19()'s docstring for the
+                # multi-value Person field shape), so membership is an exact-match array check against each
+                # project row's own Owner/ProjectSponsor array - people_contains()'s inner select() runs its
+                # own item() lambda over that array (each {Email,DisplayName,...} person), which shadows but
+                # does not clash with this Query's own outer item() (each project row, used directly for the
+                # Author/SponsorEmail checks below) - this is the same nested-item() pattern WDL's select()/
+                # filter() are built for.
                 ("Sponsor_projects", {"type": "Query", "inputs": {"from": "@body('Sponsor_projects_raw')?['value']",
-                    "where": ("@or(equals(toLower(coalesce(item()?['ProjectSponsor']?['Email'],item()?['SponsorEmail'],'')),outputs('SenderEmail')),"
-                              "equals(toLower(coalesce(item()?['Owner']?['Email'],'')),outputs('SenderEmail')),"
+                    "where": ("@or(" + people_contains("item()?['ProjectSponsor']", "outputs('SenderEmail')") + ","
+                              "equals(toLower(coalesce(item()?['SponsorEmail'],'')),outputs('SenderEmail')),"
+                              + people_contains("item()?['Owner']", "outputs('SenderEmail')") + ","
                               "equals(toLower(coalesce(item()?['Author']?['Email'],'')),outputs('SenderEmail')))")}}),
                 # when a PRJ-n tag is present, match ONLY that specific project among the ones this sender is
                 # authorized on (never a different one); with no tag, keep the old "first project they can update" fallback
@@ -2378,23 +2443,38 @@ def hd18():
 def hd19():
     """Fires when a project is added to the IT Projects list (entered directly in SharePoint by Martin or a
     tech). Breaks the new item's permission inheritance exactly as HD3 does for tickets - Owners full control,
-    the Project Sponsor Read on just that one item, nothing else on the list - then emails + Teams-messages the
-    creator, Martin and the sponsor. Stamps LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen so
-    HD20 has a clean baseline to compare against on the next edit."""
+    then Read for every Project Sponsor on just that one item, nothing else on the list - then emails +
+    Teams-messages the creator, Martin and every sponsor. Owner and Project Sponsor both allow multiple
+    people (SharePoint connector exposes a multi-value Person field as an array of {Email,DisplayName,...}
+    items, same keys as the old single-value field, just array-wrapped); ProjectSponsor also keeps a
+    plain-text SponsorEmail fallback column from before it supported multiple people, used only when no
+    Project Sponsor person is set. Stamps LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen
+    so HD20 has a clean baseline to compare against on the next edit."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
     actions = seq([
         ("CreatorEmail", compose(f"@toLower(coalesce({pt('Author/Email')},''))")),
-        ("SponsorEmail", compose(f"@toLower(coalesce({pt('ProjectSponsor/Email')},{pt('SponsorEmail')},''))")),
+        ("SponsorEmails", compose(f"@{people_emails_csv(pt('ProjectSponsor'), pt('SponsorEmail'))}")),
+        ("SponsorNames", compose(
+            f"@if(empty(coalesce({pt('ProjectSponsor')},json('[]'))),"
+            f"if(empty(coalesce({pt('SponsorEmail')},'')),'None',{pt('SponsorEmail')}),"
+            f"{people_names_csv(pt('ProjectSponsor'), 'None')})")),
+        ("OwnerNames", compose(f"@{people_names_csv(pt('Owner'), 'Not yet assigned')}")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
-        ("Has_sponsor", cond("@not(empty(outputs('SponsorEmail')))", seq([
-            ("Ensure_sponsor", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('SponsorEmail')}\"}")),
-            ("Give_sponsor_read", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_sponsor')?['Id']}},roledefid=1073741826)")),
-        ]), after=ra("Give_owners_full_control"))),
+        ("Give_sponsors_read", {"type": "Scope", "runAfter": ra("Give_owners_full_control"), "actions": {
+            "Sponsors_read_loop": {"type": "Foreach", "runAfter": {}, "foreach": "@split(outputs('SponsorEmails'),';')",
+                "actions": seq([
+                    ("Sponsor_read_who", compose("@trim(item())")),
+                    ("Sponsor_read_check", cond("@not(empty(outputs('Sponsor_read_who')))", seq([
+                        ("Ensure_sponsor", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('Sponsor_read_who')}\"}")),
+                        ("Give_sponsor_read", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_sponsor')?['Id']}},roledefid=1073741826)")),
+                    ]))),
+                ])},
+        }}),
         ("Send_created_email", {**mail("@outputs('Recipients')",
             f"[PRJ-@{{{ID}}}] New project: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
@@ -2402,42 +2482,40 @@ def hd19():
             f"<p><b>PROJECT:</b> PRJ-@{{{ID}}}: @{{{pt('Title')}}}<br>"
             f"<b>STATUS:</b> @{{{pt('Status/Value')}}}<br>"
             f"<b>PRIORITY:</b> @{{{pt('Priority/Value')}}}<br>"
-            f"<b>OWNER:</b> @{{coalesce({pt('Owner/DisplayName')},'Not yet assigned')}}<br>"
-            f"<b>SPONSOR:</b> @{{coalesce({pt('ProjectSponsor/DisplayName')},'None')}}<br>"
+            "<b>OWNER:</b> @{outputs('OwnerNames')}<br>"
+            "<b>SPONSOR:</b> @{outputs('SponsorNames')}<br>"
             f"<b>TARGET DATE:</b> @{{if(empty(coalesce({pt('TargetDate')},'')),'Not set',formatDateTime({pt('TargetDate')},'MMMM d, yyyy'))}}</p>"
             f"<p>@{{coalesce({pt('Description')},'')}}</p>"
             f"<p><a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a></p></div>"),
             "runAfter": ra("Recipients")}),
         ("Recipients", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
-            f"union(createArray('{ME}'),if(empty(outputs('SponsorEmail')),json('[]'),createArray(outputs('SponsorEmail'))))),';')"),
-            "runAfter": ra("Has_sponsor", status=("Succeeded", "Failed", "Skipped"))}),
+            "union(createArray('" + ME + "'),split(outputs('SponsorEmails'),';'))),';')"),
+            "runAfter": ra("Give_sponsors_read", status=("Succeeded", "Failed"))}),
         ("Martin_new_project", {**scope_msg("Martin_new_project_msg",
-            ME, f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>Status: @{{{pt('Status/Value')}}} · Owner: @{{coalesce({pt('Owner/DisplayName')},'Not yet assigned')}}</p>"),
+            ME, f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>Status: @{{{pt('Status/Value')}}} · Owner: @{{outputs('OwnerNames')}}</p>"),
             "runAfter": ra("Send_created_email", status=("Succeeded", "Failed"))}),
         ("Tell_creator", {**cond(tell_cond("CreatorEmail"),
             {"Creator_new_project": scope_msg("Creator_new_project_msg", "@outputs('CreatorEmail')",
                 f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>")}),
             "runAfter": ra("Martin_new_project", status=("Succeeded", "Failed"))}),
-        ("Tell_sponsor", {**cond(
-            f"@and(not(empty(outputs('SponsorEmail'))),not(equals(outputs('SponsorEmail'),'{ME}')),"
-            "not(equals(outputs('SponsorEmail'),outputs('CreatorEmail')))," + is_internal("outputs('SponsorEmail')") + ")",
-            {"Sponsor_new_project": scope_msg("Sponsor_new_project_msg", "@outputs('SponsorEmail')",
-                f"<p><b>A new IT project lists you as sponsor: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>")}),
+        ("Tell_sponsors", {**notify_each("Tell_sponsors", "outputs('SponsorEmails')",
+            f"<p><b>A new IT project lists you as sponsor: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>",
+            exclude=["outputs('CreatorEmail')"])["Tell_sponsors"],
             "runAfter": ra("Tell_creator", status=("Succeeded", "Failed"))}),
         ("Update_item", {**spp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
             "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
             "item/LastNotifiedSponsorLen": f"@length(coalesce({pt('SponsorUpdates')},''))",
             "item/LastNotifiedInternalLen": f"@length(coalesce({pt('InternalNotes')},''))"}),
-            "runAfter": ra("Tell_sponsor", status=("Succeeded", "Failed"))}),
+            "runAfter": ra("Tell_sponsors", status=("Succeeded", "Failed"))}),
     ])
-    actions.update(self_check("Health", ["Has_sponsor", "Tell_creator", "Tell_sponsor"],
+    actions.update(self_check("Health", ["Give_sponsors_read", "Tell_creator", "Tell_sponsors"],
         f"[Help desk health] HD19 problem on a new project",
         f"Project <b>PRJ-@{{{ID}}}</b> (@{{{pt('Title')}}}) was created, but these steps did not complete:",
         f"concat('PRJ-',{ID},' (created)')",
         leaf=("Break_inheritance", "Give_owners_full_control", "Send_created_email", "Martin_new_project",
-              "Creator_new_project", "Sponsor_new_project"),
+              "Creator_new_project"),
         after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
     return "HD19 Project created", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJECTS)}, actions
 
@@ -2448,9 +2526,11 @@ def hd20():
     (LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen - stamped by HD19 on creation and by this
     flow at the end of every run) to find what's actually new; a plain re-trigger off its own Update_item write
     (see CLAUDE.md) finds nothing changed and exits quietly, same as HD4 already relies on for tickets.
-    A Status change or a new Sponsor Updates entry notifies the project's creator, Martin and the Project
-    Sponsor (email + Teams). A new Internal Notes entry notifies only Martin and the project's Owner - never the
-    sponsor, and never the creator unless they are also the Owner."""
+    A Status change or a new Sponsor Updates entry notifies the project's creator, Martin and every Project
+    Sponsor (email + Teams; Owner/Project Sponsor both allow multiple people - see hd19()'s docstring for the
+    multi-value Person field shape and the legacy plain-text SponsorEmail fallback). A new Internal Notes
+    entry notifies only Martin and the project's Owner(s) - never the sponsor, and never the creator unless
+    they are also an Owner."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     V = pt('Status/Value')
@@ -2480,11 +2560,11 @@ def hd20():
         ("StatusLine", compose(f"@if({status_changed},concat('<p><b>Status changed to: ',{V},'</b></p>'),'')")),
         ("NoteLine", {**compose(f"@if({sponsor_changed},concat('<p>',{new_sponsor_text},'</p>'),'')"), "runAfter": ra("StatusLine")}),
         ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("NoteLine")}),
-        ("SponsorEmail", {**compose(f"@toLower(coalesce({pt('ProjectSponsor/Email')},{pt('SponsorEmail')},''))"), "runAfter": ra("CreatorEmail")}),
+        ("SponsorEmails", {**compose(f"@{people_emails_csv(pt('ProjectSponsor'), pt('SponsorEmail'))}"), "runAfter": ra("CreatorEmail")}),
         ("Recipients", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
-            f"union(createArray('{ME}'),if(empty(outputs('SponsorEmail')),json('[]'),createArray(outputs('SponsorEmail'))))),';')"),
-            "runAfter": ra("SponsorEmail")}),
+            "union(createArray('" + ME + "'),split(outputs('SponsorEmails'),';'))),';')"),
+            "runAfter": ra("SponsorEmails")}),
         ("Email_sponsor_update", {**mail("@outputs('Recipients')", f"[PRJ-@{{{ID}}}] Update on project: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>{MARKER}</p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"
@@ -2497,28 +2577,25 @@ def hd20():
             {"Creator_sponsor_update": scope_msg("Creator_sponsor_update_msg", "@outputs('CreatorEmail')",
                 f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}")}),
             "runAfter": ra("Martin_sponsor_update", status=("Succeeded", "Failed"))}),
-        ("Tell_sponsor_update", {**cond(
-            f"@and(not(empty(outputs('SponsorEmail'))),not(equals(outputs('SponsorEmail'),'{ME}')),"
-            "not(equals(outputs('SponsorEmail'),outputs('CreatorEmail')))," + is_internal("outputs('SponsorEmail')") + ")",
-            {"Sponsor_update": scope_msg("Sponsor_update_msg", "@outputs('SponsorEmail')",
-                f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}")}),
+        ("Tell_sponsors_update", {**notify_each("Tell_sponsors_update", "outputs('SponsorEmails')",
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}",
+            exclude=["outputs('CreatorEmail')"])["Tell_sponsors_update"],
             "runAfter": ra("Tell_creator_sponsor_update", status=("Succeeded", "Failed"))}),
     ])
     internal_branch = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
-        ("OwnerEmail", {**compose(f"@toLower(coalesce({pt('Owner/Email')},''))"), "runAfter": ra("InternalLine")}),
+        ("OwnerEmails", {**compose(f"@{people_emails_csv(pt('Owner'))}"), "runAfter": ra("InternalLine")}),
         ("Email_internal_update", {**mail(
-            f"@join(union(createArray('{ME}'),if(empty(outputs('OwnerEmail')),json('[]'),createArray(outputs('OwnerEmail')))),';')",
+            "@join(union(createArray('" + ME + "'),split(outputs('OwnerEmails'),';')),';')",
             f"[PRJ-@{{{ID}}}] Internal note: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>{MARKER}</p>@{{outputs('InternalLine')}}<p><a href=\"{PRJ_LIST_URL}@{{{ID}}}\">View in Full Detail</a></p></div>"),
-            "runAfter": ra("OwnerEmail")}),
+            "runAfter": ra("OwnerEmails")}),
         ("Martin_internal_update", {**scope_msg("Martin_internal_update_msg", ME,
             f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}"),
             "runAfter": ra("Email_internal_update", status=("Succeeded", "Failed"))}),
-        ("Tell_owner_internal_update", {**cond(tell_cond("OwnerEmail"),
-            {"Owner_internal_update": scope_msg("Owner_internal_update_msg", "@outputs('OwnerEmail')",
-                f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}")}),
+        ("Tell_owners_internal_update", {**notify_each("Tell_owners_internal_update", "outputs('OwnerEmails')",
+            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}")["Tell_owners_internal_update"],
             "runAfter": ra("Martin_internal_update", status=("Succeeded", "Failed"))}),
     ])
     actions = seq([
@@ -2534,8 +2611,8 @@ def hd20():
         f"[Help desk health] HD20 problem on project update",
         f"Project <b>PRJ-@{{{ID}}}</b> (@{{{pt('Title')}}}) was updated, but these steps did not complete:",
         f"concat('PRJ-',{ID},' (updated)')",
-        leaf=("Email_sponsor_update", "Martin_sponsor_update", "Creator_sponsor_update", "Sponsor_update",
-              "Email_internal_update", "Martin_internal_update", "Owner_internal_update"),
+        leaf=("Email_sponsor_update", "Martin_sponsor_update", "Creator_sponsor_update",
+              "Email_internal_update", "Martin_internal_update"),
         after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
     # Without a trigger-level condition, Update_item's own PATCH (it runs unconditionally, even when nothing
     # changed, to keep LastNotified* in sync) bumps the item's Modified date like any other edit, re-firing this
