@@ -236,10 +236,20 @@ def leaf_item(x):
     return ("json(concat('{\"name\":\"%s\",\"status\":\"',coalesce(actions('%s')?['status'],'Skipped'),"
             "'\",\"error\":{\"message\":\"',%s,'\"}}'))" % (x, x, safe))
 
-def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=None, leaf=()):
+def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=None, leaf=(), dash_id=None, dash_title=None):
     """Monitoring: look at the results of the listed scoped actions (Scope / If / Foreach) and, if any top-level
     action in them did not succeed, email + Teams-message Martin with the action names, error text and a link to
     the run. `extra` is an optional expression returning additional {name,status} items (synthetic checks).
+    `dash_id`/`dash_title` pick which dashboard row's Slot10/Slot11 "last problem" stamp this call writes to -
+    DASH_HEALTH/"Health" (ticket flows HD3/HD4) by default, or DASH_PROJHEALTH/"ProjectHealth" (project flows
+    HD19/HD20) when passed explicitly. Keeping these separate per flow family matters: HD16 reads DASH_HEALTH's
+    Slot10/Slot11 to build the ticket-system "Notifications (HD3/HD4 self-checks)" digest line, and before this
+    was split every self_check call (ticket AND project) stamped the same DASH_HEALTH row - a PRJ-n problem from
+    HD19/HD20 would silently overwrite a ticket problem (or vice versa), show up mislabeled under the ticket
+    digest, inflate the ticket IssueCount/Total and trip Alert_if_changed for a problem that was actually on the
+    project side, while having nowhere of its own to surface on the Project Health panel. Found 2026-10-26 when
+    a stale HD20 self-check failure on PRJ-3 (the already-fixed `select()` bug, see the troubleshooting table)
+    showed up in the "Help desk health" (ticket) digest as "Notifications (HD3/HD4 self-checks)".
     Returns {name: action}; the first action takes `after`."""
     src = "union(" + ",".join(f"result('{s}')" for s in scoped) + ")"
     if extra:
@@ -261,8 +271,11 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
             (f"{prefix}_email", mail(ME, subject, html)),
             (f"{prefix}_teams", {"type": "Scope", "runAfter": ra(f"{prefix}_email", status=("Succeeded", "Failed")),
                                  "actions": support_msg(f"{prefix}_dm", ME, html)}),
-            # stamp the dashboard (HD16 shows it in the problem band for 24h)
-            (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health",
+            # stamp the dashboard (HD16/HD16's project half shows it in the problem band for 24h) - see dash_id
+            # in the docstring above for why this isn't always DASH_HEALTH.
+            (f"{prefix}_dashboard", sp("PatchItem", {"table": DASH,
+                "id": dash_id if dash_id is not None else DASH_HEALTH,
+                "item/Title": dash_title if dash_title is not None else "Health",
                 "item/Slot11": "@utcNow('yyyy-MM-ddTHH:mm:ssZ')",
                 "item/Slot10": f"@concat('Last problem: ',{ticket_ref},' — ',string(length(body('{prefix}_problems'))),' step(s) failed, ',{nowET('MMM d h:mm tt')},' (details emailed)')"},
                 after=ra(f"{prefix}_teams", status=("Succeeded", "Failed")))),
@@ -2162,6 +2175,7 @@ def hd16():
     working = " or ".join(f"Status eq '{s}'" for s in WORKING)
     ANY = ("Succeeded", "Failed", "Skipped", "TimedOut")
     prev = "body('Previous')"
+    prev_proj = "body('Previous_proj')"
     NL = "decodeUriComponent('%0A')"
     hourET = f"int({nowET('HH')})"
     office = f"and(greaterOrEquals({hourET},7),less({hourET},21))"
@@ -2200,12 +2214,20 @@ def hd16():
     proj_issue_count = proj_bad_terms[0]
     for t in proj_bad_terms[1:]:
         proj_issue_count = f"add({proj_issue_count},{t})"
+    # a HD19/HD20 self_check failure (stamped on DASH_PROJHEALTH's own Slot10/Slot11 - see self_check's
+    # dash_id/dash_title) shown for 24h, same convention as NotifyRecent/Slot10 does for the ticket side below.
+    proj_issue_count = f"add({proj_issue_count},if(outputs('ProjNotifyRecent'),1,0))"
     proj_problem_terms = [f"if(and(outputs('FlowsOk'),not(equals({c},1))),'{PROJECT_FLOW_LABELS[name]}; ','')"
                            for name, c in zip(EXPECTED_PROJECT_FLOWS, proj_counts)]
+    proj_problem_terms.append(f"if(outputs('ProjNotifyRecent'),concat('Notifications (HD19/HD20 self-checks): ',{prev_proj}?['Slot10'],'; '),'')")
 
     acts = seq([
         ("Previous", sp("GetItem", {"table": DASH, "id": DASH_HEALTH})),
-        ("Probes", {"type": "Scope", "runAfter": ra("Previous", status=ANY), "actions": probes}),
+        ("Previous_proj", {**sp("GetItem", {"table": DASH, "id": DASH_PROJHEALTH}), "runAfter": ra("Previous", status=ANY)}),
+        # merges the Previous_proj branch back into the main chain right away, so everything after this point
+        # (ProjNotifyRecent included, further down, auto-chained with no runAfter of its own) is guaranteed to run
+        # after Previous_proj has completed, not just after Previous.
+        ("Probes", {"type": "Scope", "runAfter": {**ra("Previous", status=ANY), **ra("Previous_proj", status=ANY)}, "actions": probes}),
         ("Probe_failed", {"type": "Query", "runAfter": ra("Probes", status=ANY), "inputs": {"from": "@result('Probes')",
             "where": "@not(equals(item()?['status'],'Succeeded'))"}}),
         ("Probe_names", {"type": "Select", "inputs": {"from": "@body('Probe_failed')", "select": "@" + label_expr}}),
@@ -2287,6 +2309,11 @@ def hd16():
 
         # notification problems flagged by HD3/HD4 (they stamp Slot11 with the UTC time): shown for 24h
         ("NotifyRecent", compose(f"@greater(ticks(if(empty(coalesce({prev}?['Slot11'],'')),'2000-01-01T00:00:00Z',{prev}?['Slot11'])),ticks(addHours(utcNow(),-24)))")),
+        # same thing for HD19/HD20 self-check failures, off DASH_PROJHEALTH's own Slot10/Slot11 - never DASH_HEALTH's.
+        # No explicit runAfter: Previous_proj ran in parallel with Probes right at the start, long before this point
+        # in the chain, so letting seq() auto-chain this straight after NotifyRecent keeps the single-chain backbone
+        # (and everything IssueCount transitively needs) intact instead of detouring IssueCount's dependency off it.
+        ("ProjNotifyRecent", compose(f"@greater(ticks(if(empty(coalesce({prev_proj}?['Slot11'],'')),'2000-01-01T00:00:00Z',{prev_proj}?['Slot11'])),ticks(addHours(utcNow(),-24)))")),
 
         ("IssueCount", compose(
             "@add(add(add(add(add(add(add("
@@ -2332,6 +2359,9 @@ def hd16():
             "item/Total": f"@if(outputs('FlowsOk'),{proj_issue_count},-1)",
             "item/Grad": "@if(not(outputs('FlowsOk')),'could not list flows',trim(concat(" +
                 ",".join(proj_problem_terms) + ")))",
+            # echoes self_check's own HD19/HD20 stamp back for the next run to read, same convention as the
+            # ticket row's item/Slot10 below - Slot11 is never touched here, only self_check writes it.
+            "item/Slot10": f"@if(empty(coalesce({prev_proj}?['Slot10'],'')),'no problems reported',{prev_proj}?['Slot10'])",
             **proj_flow_fields})),
         ("Report", compose(
             "@concat("
@@ -2541,7 +2571,8 @@ def hd19():
         f"concat('PRJ-',{ID},' (created)')",
         leaf=("Break_inheritance", "Give_owners_full_control", "Send_created_email", "Martin_new_project",
               "Creator_new_project"),
-        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
+        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     return "HD19 Project created", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJECTS)}, actions
 
 # ---------- HD20 Project updated ----------
@@ -2640,7 +2671,8 @@ def hd20():
         f"concat('PRJ-',{ID},' (updated)')",
         leaf=("Email_sponsor_update", "Martin_sponsor_update", "Creator_sponsor_update",
               "Email_internal_update", "Martin_internal_update"),
-        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped"))))
+        after=ra("Update_item", status=("Succeeded", "Failed", "Skipped")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     # Without a trigger-level condition, Update_item's own PATCH (it runs unconditionally, even when nothing
     # changed, to keep LastNotified* in sync) bumps the item's Modified date like any other edit, re-firing this
     # same trigger - which then finds status_changed/sponsor_changed/internal_changed all false and does nothing
