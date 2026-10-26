@@ -155,32 +155,52 @@ def team_msgs(prefix, html, team):
 # Both columns now allow multiple people. The SharePoint connector flattens a multi-value Person field
 # into an array of objects shaped like its single-value form (Email, DisplayName, Claims, ...) - the same
 # Email/DisplayName keys the existing singular code already reads (pt('Owner/Email') etc.), just
-# array-wrapped. These helpers build the join/membership expressions used against that array, plus (for
-# Project Sponsor only) a plain-text SponsorEmail fallback column kept from before the field supported
-# multiple people.
-def people_emails_csv(expr, fallback_single=None):
-    """`;`-joined, lower-cased, de-duplicated emails from a multi-value Person array expression (no
-    leading @); '' when there are none. `fallback_single`, if given, is a plain-text email expression
-    used only when the array is empty (legacy single-email field)."""
-    joined = f"join(union(select(coalesce({expr},json('[]')),toLower(coalesce(item()?['Email'],'')))),';')"
+# array-wrapped - confirmed live 2026-10-26 against a real trigger body (Owner.0.Email, Owner.1.Email, ...).
+#
+# Power Automate's expression language has NO select()/filter() lambda function - "Select" and "Filter
+# array" (Query) only exist as dedicated ACTIONS, never as something callable inline inside another
+# expression (confirmed live 2026-10-26: HD19 failed with "InvalidTemplate ... the template function
+# 'select' is not defined or not valid" the first time this file used an inline select(...) call). So
+# extracting values (emails/names, for joining into a recipient list) needs an actual Select action
+# first - people_select() below - with the join done afterwards by a Compose reading that action's body.
+# A membership *check* (does this array contain a given email) doesn't need a new action, since Query's
+# own "where" clause is itself just an expression with no action step of its own to attach a nested Select
+# to (this bites HD12's Sponsor_projects Query specifically, whose where clause already runs per outer
+# item()) - people_contains() instead lower-cases the whole array's JSON serialization and substring-
+# matches '"email":"<address>"', which is safe because a SharePoint Person field's Email can't contain a
+# literal '"'.
+def people_select(name, expr, key, after=None):
+    """A 'Select' action (named `name`) extracting `key` ('Email' or 'DisplayName') from each item of a
+    multi-value Person array expression (`expr`, no leading @). Email is lower-cased on the way out.
+    Returns {name: action}; its body (an array of plain strings) is read as body('{name}')."""
+    sel = f"@toLower(coalesce(item()?['{key}'],''))" if key == "Email" else f"@coalesce(item()?['{key}'],'')"
+    return {name: {"type": "Select", "runAfter": after or {},
+        "inputs": {"from": f"@coalesce({expr},json('[]'))", "select": sel}}}
+
+def join_emails(select_name, fallback_single=None):
+    """';'-joined emails from a people_select(..., 'Email') action's body (`select_name`, the action's
+    name, no leading @ needed). `fallback_single`, if given, is a plain-text email expression (no leading
+    @) used only when that Select produced an empty array (legacy single-email field)."""
+    joined = f"join(body('{select_name}'),';')"
     if fallback_single:
-        return f"if(empty({joined}),toLower(coalesce({fallback_single},'')),{joined})"
+        return f"if(empty(body('{select_name}')),toLower(coalesce({fallback_single},'')),{joined})"
     return joined
 
-def people_names_csv(expr, empty_text):
-    """Comma-joined display names from a multi-value Person array expression (no leading @);
-    `empty_text` (e.g. 'Not yet assigned') when there are none."""
-    joined = f"join(select(coalesce({expr},json('[]')),coalesce(item()?['DisplayName'],'')),', ')"
-    return f"if(empty(coalesce({expr},json('[]'))),'{empty_text}',{joined})"
+def join_names(select_name, empty_text):
+    """Comma-joined display names from a people_select(..., 'DisplayName') action's body (`select_name`,
+    no leading @ needed); `empty_text` (e.g. 'Not yet assigned') when that Select produced an empty array."""
+    return f"if(empty(body('{select_name}')),'{empty_text}',join(body('{select_name}'),', '))"
 
 def people_contains(expr, email_expr):
     """True if the lower-cased `email_expr` (no leading @) is one of the Emails in a multi-value Person
-    array expression (no leading @)."""
-    return f"contains(select(coalesce({expr},json('[]')),toLower(coalesce(item()?['Email'],''))),{email_expr})"
+    array expression (`expr`, no leading @) - see the module comment above for why this can't just be
+    contains(select(...)) despite looking like it should be able to."""
+    return (f"contains(toLower(string(coalesce({expr},json('[]')))),"
+            f"concat('\"email\":\"',{email_expr},'\"'))")
 
 def notify_each(prefix, csv_expr, html, exclude=()):
     """1:1-message every non-empty, internal, non-excluded address in a `;`-joined email string
-    (`csv_expr`, no leading @ - typically from people_emails_csv). `exclude` is a list of expressions
+    (`csv_expr`, no leading @ - typically a join_emails(...) Compose's outputs('...')). `exclude` is a list of expressions
     (no leading @, already lower-cased, e.g. outputs('CreatorEmail')) to skip, so someone who is both the
     creator and a sponsor isn't messaged twice. Returns {name: action} with one Scope named `prefix`
     wrapping a Foreach, so self_check's `result('{prefix}')` sees pass/fail the same way it already does
@@ -1765,12 +1785,13 @@ def hd12():
                                       "if(not(contains('0123456789',substring(outputs('PrjRefPart'),4,1))),4,5)))))))")),
                 ("Sponsor_projects_raw", sp("GetItems", {"table": PROJECTS, "$orderby": "Modified desc", "$top": 200})),
                 # Owner and Project Sponsor both allow multiple people (see hd19()'s docstring for the
-                # multi-value Person field shape), so membership is an exact-match array check against each
-                # project row's own Owner/ProjectSponsor array - people_contains()'s inner select() runs its
-                # own item() lambda over that array (each {Email,DisplayName,...} person), which shadows but
-                # does not clash with this Query's own outer item() (each project row, used directly for the
-                # Author/SponsorEmail checks below) - this is the same nested-item() pattern WDL's select()/
-                # filter() are built for.
+                # multi-value Person field shape), so membership is an exact-match check against each
+                # project row's own Owner/ProjectSponsor array - via people_contains()'s JSON-substring
+                # match (see that function's docstring for why: this Query's own "where" is itself just an
+                # expression with no action of its own to attach a nested Select/Filter-array action to,
+                # and Power Automate has no inline select()/filter() expression function to fall back on).
+                # item() in each people_contains() call still refers to this Query's own outer loop
+                # variable (each project row) - it's inside concat()/string(), not a lambda of its own.
                 ("Sponsor_projects", {"type": "Query", "inputs": {"from": "@body('Sponsor_projects_raw')?['value']",
                     "where": ("@or(" + people_contains("item()?['ProjectSponsor']", "outputs('SenderEmail')") + ","
                               "equals(toLower(coalesce(item()?['SponsorEmail'],'')),outputs('SenderEmail')),"
@@ -2454,14 +2475,18 @@ def hd19():
     ID = pt('ID')
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
+    sponsor_email_fallback = pt('SponsorEmail')
     actions = seq([
         ("CreatorEmail", compose(f"@toLower(coalesce({pt('Author/Email')},''))")),
-        ("SponsorEmails", compose(f"@{people_emails_csv(pt('ProjectSponsor'), pt('SponsorEmail'))}")),
+        ("Sponsor_emails_select", people_select("Sponsor_emails_select", pt('ProjectSponsor'), "Email")["Sponsor_emails_select"]),
+        ("Sponsor_names_select", people_select("Sponsor_names_select", pt('ProjectSponsor'), "DisplayName")["Sponsor_names_select"]),
+        ("Owner_names_select", people_select("Owner_names_select", pt('Owner'), "DisplayName")["Owner_names_select"]),
+        ("SponsorEmails", compose(f"@{join_emails('Sponsor_emails_select', sponsor_email_fallback)}")),
         ("SponsorNames", compose(
-            f"@if(empty(coalesce({pt('ProjectSponsor')},json('[]'))),"
-            f"if(empty(coalesce({pt('SponsorEmail')},'')),'None',{pt('SponsorEmail')}),"
-            f"{people_names_csv(pt('ProjectSponsor'), 'None')})")),
-        ("OwnerNames", compose(f"@{people_names_csv(pt('Owner'), 'Not yet assigned')}")),
+            f"@if(empty(body('Sponsor_emails_select')),"
+            f"if(empty(coalesce({sponsor_email_fallback},'')),'None',{sponsor_email_fallback}),"
+            f"{join_names('Sponsor_names_select', 'None')})")),
+        ("OwnerNames", compose(f"@{join_names('Owner_names_select', 'Not yet assigned')}")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
@@ -2560,7 +2585,8 @@ def hd20():
         ("StatusLine", compose(f"@if({status_changed},concat('<p><b>Status changed to: ',{V},'</b></p>'),'')")),
         ("NoteLine", {**compose(f"@if({sponsor_changed},concat('<p>',{new_sponsor_text},'</p>'),'')"), "runAfter": ra("StatusLine")}),
         ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("NoteLine")}),
-        ("SponsorEmails", {**compose(f"@{people_emails_csv(pt('ProjectSponsor'), pt('SponsorEmail'))}"), "runAfter": ra("CreatorEmail")}),
+        ("Sponsor_emails_select", {**people_select("Sponsor_emails_select", pt('ProjectSponsor'), "Email")["Sponsor_emails_select"], "runAfter": ra("CreatorEmail")}),
+        ("SponsorEmails", {**compose(f"@{join_emails('Sponsor_emails_select', pt('SponsorEmail'))}"), "runAfter": ra("Sponsor_emails_select")}),
         ("Recipients", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
             "union(createArray('" + ME + "'),split(outputs('SponsorEmails'),';'))),';')"),
@@ -2584,7 +2610,8 @@ def hd20():
     ])
     internal_branch = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
-        ("OwnerEmails", {**compose(f"@{people_emails_csv(pt('Owner'))}"), "runAfter": ra("InternalLine")}),
+        ("Owner_emails_select", {**people_select("Owner_emails_select", pt('Owner'), "Email")["Owner_emails_select"], "runAfter": ra("InternalLine")}),
+        ("OwnerEmails", {**compose(f"@{join_emails('Owner_emails_select')}"), "runAfter": ra("Owner_emails_select")}),
         ("Email_internal_update", {**mail(
             "@join(union(createArray('" + ME + "'),split(outputs('OwnerEmails'),';')),';')",
             f"[PRJ-@{{{ID}}}] Internal note: @{{{pt('Title')}}}",
