@@ -1,0 +1,25 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "display": "flex",
+    "align-items": "center",
+    "font-weight": "600",
+    "color": "=if(@currentField=='High','#a4262c',if(@currentField=='Medium','#8a6d00','#605e5c'))"
+  },
+  "children": [
+    {
+      "elmType": "span",
+      "attributes": {
+        "iconName": "=if(@currentField=='High','Important',if(@currentField=='Medium','CircleHalfFull','CircleRing'))"
+      },
+      "style": {
+        "margin-right": "6px"
+      }
+    },
+    {
+      "elmType": "span",
+      "txtContent": "@currentField"
+    }
+  ]
+}
