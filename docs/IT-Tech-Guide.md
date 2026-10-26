@@ -7,7 +7,7 @@ Business day for SLA purposes: the hourly clock (HD6, and the BusinessHoursOpen/
 
 | Source | What happens |
 |---|---|
-| Email to the help desk mailbox | HD1 creates a ticket. A reply containing an [IT-123] tag updates that ticket. Branthaven senders always get a ticket; outside senders only if their address or domain is on the **External Senders** list (see below). Everything else lands in the mailbox's **Review** folder and is ignored. |
+| Email to the help desk mailbox | HD1 creates a ticket. A reply containing an [IT-123] tag updates that ticket. Branthaven senders always get a ticket; outside senders only if their address or domain is on the **External Senders** list (see below). Everything else lands in the mailbox's **Review** folder and is ignored — except a Microsoft Teams "missed activity" relay (someone messaged IT Support's own Teams presence and it went unread), which still can't become a ticket but now also alerts Martin by email and Teams before parking in Review (see "Review folder" below). |
 | IT Support form (Microsoft Forms) | HD2 creates a ticket. |
 | **Report an IT issue** Teams app | HD14 creates a ticket (source: "Teams form"). |
 
@@ -49,6 +49,10 @@ What's different for an external ticket:
 - They reply by email (keeping IT-<n> in the subject) and that's posted to the ticket exactly like an internal reply. Techs work the ticket the same way.
 - Anything from an address that isn't on the list stays in the **Review** folder. Glance at it now and then; a legitimate request from an unknown vendor means "add them to the list and forward the email to the mailbox", not a manual ticket.
 
+### Review folder — Teams missed-activity relays now alert you
+
+If someone messages the IT Support Teams presence directly (not a channel, not a chat reply HD12 already catches) and it goes unread, Microsoft Teams emails the mailbox a "**<name> sent a message**" / "**<name> is trying to reach you in Microsoft Teams**" notification. The sender on these is always Microsoft's own relay address (contains `teams.mail.microsoft`), never the actual person — so it can never be on the External Senders list and can never become a real ticket (no reliable requester identity). Since 2026-10-26, HD1 recognizes these specifically: it still can't ticket them, but it now relays the content to Martin by email and Teams (`[Help desk health] Missed Teams message: <subject>`) before moving the original to Review, the same pattern HD1 already uses for Power Automate's own system alerts. Before that fix, these were indistinguishable from random unknown-sender spam and simply disappeared into Review with zero alerting — see the troubleshooting table.
+
 ## Status guide
 
 | Status | Use when | SLA clock |
@@ -84,7 +88,7 @@ The **By IT Support (30 days)** view of the Tickets list groups the last 30 days
 | Flows | Power Automate Management "List My Flows": every expected flow (HD1–HD9, HD11, HD12, HD15, HD16 v2) is **on, exactly once**. HD13/HD17 (run-once) are not expected on; HD14 is owned by Martin's account so it is not visible to this check. HD19/HD20/HD21 (IT Projects) are checked separately — see "IT Project Systems" below — and deliberately **not** folded into this card, to avoid double-reporting and to keep this card's "14 flows on, one copy each" meaning unchanged. | "HDx is off or missing" / "HDx has 2 copies on" — turn the right one on, delete the duplicate |
 | New tickets set up | Tickets created in the last 24 h have a Planner task, a channel post and the "Ticket created" line | HD3 is not finishing — open its run history |
 | Updates notified (HD4) | No ticket whose Status differs from LastNotifiedStatus for more than 30 min (the requester was never told) | HD4 is not running — check its run history and the SharePoint connection |
-| Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review; Microsoft/Power Automate system mail ignored); amber if mail landed in **Review** in the last 24 h (system mail ignored) | HD1 is not ticketing email |
+| Email intake (HD1) | No mail older than 20 min still sitting in the IT Support **Inbox** (HD1 moves everything to Processed or Review; Microsoft/Power Automate system mail ignored); amber if mail landed in **Review** in the last 24 h (system mail and IT Support's own self-sent test mail ignored) | HD1 is not ticketing email — but this card only watches the last 24 h; a Teams missed-activity relay older than that (now alerted on separately, see "Review folder" above) won't show here, so it's still worth glancing in the Review folder itself now and then |
 | Clock & auto-close (HD6) | An open ticket has been touched in the last 3 h (checked 11:00–21:59 only, since HD6 runs 8–21); nothing resolved more than 72 h ago is still "Resolved Pending Confirmation" | HD6 stopped — SLA clock, reminders and auto-close are all off |
 | Dashboard data (HD15) | The stats rows behind the charts were refreshed in the last 30 min (checked 7am–9pm) | HD15 stopped — the charts below are stale |
 
@@ -180,6 +184,7 @@ Three more lists on the help desk site hold data end users shouldn't see, but �
 |---|---|
 | No confirmation sent | HD3 run history (Power Automate), requester email field on the ticket |
 | Ticket not created from email | HD1 run history; was it sent to the right mailbox? Outside sender: is their domain/address on the External Senders list? Check the Review folder. |
+| A Teams message to IT Support went unanswered for days and nobody knew it existed | Found 2026-10-26: Andrea Royers messaged IT Support's Teams presence directly on Fri Oct 23 ("Hi Martin, I'm still not able to access Andre's email") — Teams emailed the mailbox a "missed activity" relay (sender always contains `teams.mail.microsoft`, never the real person), which HD1 couldn't match to any known sender, so it silently parked in Review with zero alerting, same as any other unrecognized sender. It then aged out of HD16's 24h Review-folder watch before anyone checked the folder by hand. Fixed in `generator/gen.py` (`hd1`'s `Is_a_Teams_missed_activity` check, right after the existing Power-Automate-alert relay): these are now detected by sender and relayed to Martin by email + Teams immediately, same pattern as the PA-alert relay, before still moving to Review (it can't become a real ticket — no reliable sender identity). Re-import `HD1.zip` from `flows/` with **Update**. Not yet live-tested — send a Teams chat to the IT Support account and confirm the relay email/Teams message actually arrives before relying on this. |
 | App says error on Send | HD14 run history; the Category chosen must match a SharePoint Category choice |
 | Reminder/close didn't fire | HD6 run history (runs 8am–9pm) |
 | Emails stop but Teams messages still arrive | Power Automate › Connections › Office 365 Outlook. If a flow's email step fails with `Unexpected connection parameter set name: 'oauthDelegated'`, the connection was recreated as the wrong type: make a new Office 365 Outlook connection (default sign-in), delete the old one, re-import `HelpDesk-all-flows.zip` with **Update** on every row. Never import with *Create as new* — that makes duplicate flows. |

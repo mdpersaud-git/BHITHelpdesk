@@ -716,6 +716,31 @@ def hd1():
                 ("Move_alert_to_Review", {**move(F_REVIEW), "runAfter": ra("Relay_alert_teams", status=("Succeeded", "Failed"))}),
                 ("Terminate_alert", {"type": "Terminate", "runAfter": ra("Move_alert_to_Review", status=("Succeeded", "Failed")), "inputs": {"runStatus": "Succeeded"}}),
             ]))),
+        # Microsoft Teams "missed activity" relay: when a Teams chat sent to IT_Support's own Teams presence goes
+        # unread, Teams emails a notification here (sender always contains 'teams.mail.microsoft', subject "<name>
+        # sent a message" / "<name> is trying to reach you in Microsoft Teams"). That sender is never Branthaven
+        # and is never going to be on the External Senders list (it's Microsoft's relay address, not the real
+        # person's), so without this check it fell straight into the unknown-sender branch below: silently moved
+        # to Review and terminated, with no alert at all. Found 2026-10-26: Andrea Royers' "Hi Martin, I'm still
+        # not able to access Andre's email" (sent via Teams chat, Fri Oct 23) sat unread and unactioned in Review
+        # for 3 days — nobody knew it existed until the Review folder was checked by hand, and by then it had also
+        # aged out of HD16's 24h "mail landed in Review" window, so even the dashboard never flagged it. Mirrors
+        # the Is_a_Power_Automate_alert relay just above: can't become a real ticket (no reliable sender identity
+        # for whoever actually sent the Teams message), so it still parks in Review for the audit trail, but Martin
+        # now gets told immediately instead of finding out by accident.
+        ("Is_a_Teams_missed_activity", cond(
+            "@contains(outputs('Sender'),'teams.mail.microsoft')",
+            seq([
+                ("Relay_teams_email", mail(ME, f"[Help desk health] Missed Teams message: @{{{T}}}",
+                    "<p style=\"color:#888;font-size:12px\">Relayed from the IT Support mailbox — someone messaged "
+                    "IT Support in Teams and it went unread.</p>@{triggerOutputs()?['body/body']}")),
+                ("Relay_teams_teams", {"type": "Scope", "runAfter": ra("Relay_teams_email", status=("Succeeded", "Failed")),
+                    "actions": support_msg("Relay_teams_dm", ME,
+                        f"<p><b>Missed Teams message:</b> @{{{T}}}</p><p>Someone messaged IT Support in Teams and it "
+                        "wasn't picked up. Full details are in your email.</p>")}),
+                ("Move_teams_to_Review", {**move(F_REVIEW), "runAfter": ra("Relay_teams_teams", status=("Succeeded", "Failed"))}),
+                ("Terminate_teams", {"type": "Terminate", "runAfter": ra("Move_teams_to_Review", status=("Succeeded", "Failed")), "inputs": {"runStatus": "Succeeded"}}),
+            ]))),
         ("Is_it_a_real_email_from_a_known_sender", cond(
             f"@and(or(outputs('IsInternal'),outputs('IsAllowedExternal')),not(equals(outputs('Sender'),toLower('{MBX}'))),"
             f"not(startsWith(coalesce({T},''),'Automatic reply')),not(startsWith(coalesce({T},''),'Undeliverable')))",
