@@ -168,8 +168,10 @@ If someone replies — by email or in the Teams chat — to a ticket that's alre
 
 ### Who can see a ticket (permissions)
 
-- The **IT Support Tickets** list has **unique permissions** (it does not inherit from the site): only the site Owners group (IT Support). The site's Visitors group (BH Head Office) and Members must *not* be on the list, or every staff member can read every ticket.
+- The **IT Support Tickets** list has **unique permissions** (it does not inherit from the site): only the site Owners group ("IT Help Desk v2 Owners") has list-level access. The site's Visitors group (BH Head Office) and Members must *not* be on the list, or every staff member can read every ticket.
 - HD3 then breaks inheritance on each new ticket and grants Owners full control and the requester **Read** on their own item. Requesters update a ticket by replying (email "Reply to IT" / Teams chat), never by editing the list.
+- The same Owners group is what governs **IT Projects** too (HD19 grants it full control on each new project item, plus Sponsors Read-only on their own item).
+- **Owners group membership (as of 2026-10-27): IT Support [Branthaven] (service account), Martin Persaud, Talal Siddiqui, Joseph El-Kadi.** Talal and Joseph were added that day after losing direct SharePoint edit access to Tickets/Projects in an earlier permissions change — Teams-based updates kept working throughout since those run through the IT_Support service account's own connection, not the tech's personal SharePoint permissions. Being in this group gives them Full Control site-wide (not just Edit on tickets/projects) — accepted as a tradeoff for 2 trusted techs rather than building a separate scoped Edit-only group.
 - The flows address the list by GUID (`TICKETS` in `gen.py`), never by title — renaming the list must not break them. (Until Oct 2026 the permission steps used the old title `Tickets` and failed silently after the list was renamed; run **HD17 Fix ticket permissions** once (button flow) to stop the list inheriting, drop Visitors/Members, and backfill every existing ticket. Safe to re-run.)
 - Check: `…/_api/web/lists(guid'22c09b0b-…')?$select=HasUniqueRoleAssignments` should be `true` for the list and for every item.
 
