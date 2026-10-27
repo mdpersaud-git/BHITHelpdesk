@@ -2214,8 +2214,9 @@ FLOW_DESCRIPTIONS = {
         "Owned by Martin's account, not IT_Support - see IT-Tech-Guide.md.",
     "HD15 Dashboard stats": "Refreshes every stat behind the IT Dashboard page - ticket and project donuts, "
         "KPI tiles, trend/service/workload charts - alongside the ticket stats.",
-    "HD16 Health check v2": "Runs hourly 24/7: the System Health panel's cards, the IT Project Systems panel, "
-        "the Notifications band, a 9:30am daily digest, and a Teams alert whenever the issue count changes.",
+    "HD16 Health check v2": "Runs hourly 24/7: the System Health panel's 8 cards (including a reauthentication "
+        "check separate from the live connection probes), the IT Project Systems panel, the Notifications band, "
+        "a 9:30am daily digest, and a Teams alert whenever the issue count changes.",
     "HD17 Fix ticket permissions (run once)": "One-off: stops the Tickets list inheriting site permissions and "
         "sets per-item permissions (owners full control, requester Read) on every existing ticket.",
     "HD18 Quick close (SharePoint)": "Type the resolution below, then click Run flow to assign this ticket to "
@@ -2229,7 +2230,7 @@ FLOW_DESCRIPTIONS = {
 }
 
 def hd16():
-    """Runs hourly, 24/7. Seven cards on the IT dashboard "System health" panel, a one-line-per-problem band under
+    """Runs hourly, 24/7. Eight cards on the IT dashboard "System health" panel, a one-line-per-problem band under
     them, an ISO timestamp the dashboard uses to grey the panel out when this flow stops, a daily 9:30 email and a
     Teams message whenever the issue count changes (alerts only 7am-9pm; overnight problems wait on the panel).
       1 Connections   read-only probe through every connector (Forms has no read action, so it is not probed)
@@ -2238,7 +2239,14 @@ def hd16():
       4 Updates       tickets whose status changed >30 min ago but the requester was never told (HD4 dead)
       5 Intake        mail sitting in the Inbox >20 min (HD1 dead; red) / mail parked in Review in 24h (amber)
       6 Clock         HD6 heartbeat (nothing touched in 3h) and resolved tickets not auto-closed after 72h
-      7 Dashboard     DashStats row refreshed in the last 30 min (HD15 dead), checked 7am-9pm only"""
+      7 Dashboard     DashStats row refreshed in the last 30 min (HD15 dead), checked 7am-9pm only
+      8 Reauthentication   Power Automate Management, List My Connections - flags any connection whose record
+                      doesn't contain the word "Connected" anywhere (see ReauthQuery below for why this is a
+                      deliberately loose, fail-loud check rather than a parsed status field - Microsoft doesn't
+                      document the connection object's status schema, see docs/IT-Tech-Guide.md). This is a
+                      DIFFERENT signal from card 1: card 1 asks "does a live call succeed right now"; this asks
+                      "has Power Automate itself flagged this connection as needing attention" - the thing behind
+                      the "Action required" banner seen in the portal on 2026-10-25, which card 1 does not catch."""
     it = lambda k: f"item()?['{k}']"
     li = lambda body: f"concat('<li>',{body},'</li>')"
     working = " or ".join(f"Status eq '{s}'" for s in WORKING)
@@ -2307,6 +2315,22 @@ def hd16():
         ("FlowStr", compose("@join(body('FlowList'),';')")),
         ("FlowProblems", compose("@if(outputs('FlowsOk'),trim(" + flow_problems + "),'')")),
         ("FlowBad", compose("@and(outputs('FlowsOk'),greater(length(outputs('FlowProblems')),0))")),
+
+        # --- 2b. reauthentication: Power Automate's own per-connection status, not a live call (see hd16()
+        # docstring card 8). Microsoft doesn't publish the connection object's status schema for this connector,
+        # so instead of parsing a specific field path (which could silently stop working if the real path is
+        # wrong), this stringifies each whole connection record and flags it if the word "connected" is not
+        # found anywhere in it. That's deliberately loose: it fails LOUD (flags everything) if Microsoft ever
+        # changes the schema so the word disappears, rather than failing quiet (flags nothing, looking healthy
+        # when it isn't) - the first live run's Slot23 text is the way to confirm this is actually working.
+        ("Connections_list", op("shared_flowmanagement", "ListConnections", {"environmentName": "@workflow()?['tags']?['environmentName']"})),
+        ("ConnectionsOk", compose("@equals(actions('Connections_list')?['status'],'Succeeded')", after=ra("Connections_list", status=ANY))),
+        ("ReauthQuery", {"type": "Query", "runAfter": ra("ConnectionsOk", status=ANY), "inputs": {
+            "from": "@if(outputs('ConnectionsOk'),coalesce(body('Connections_list')?['value'],json('[]')),json('[]'))",
+            "where": "@not(contains(toLower(string(item())),'connected'))"}}),
+        ("ReauthNames", {"type": "Select", "inputs": {"from": "@body('ReauthQuery')",
+            "select": "@coalesce(item()?['properties']?['displayName'],item()?['name'],'(unnamed connection)')"}}),
+        ("ReauthBad", compose("@and(outputs('ConnectionsOk'),greater(length(body('ReauthQuery')),0))")),
 
         # --- 3. new tickets set up ---
         ("Recent", sp("GetItems", {"$filter": "Created ge '@{addHours(utcNow(),-24)}' and Created lt '@{addMinutes(utcNow(),-20)}'", "$top": 500})),
@@ -2385,17 +2409,19 @@ def hd16():
         ("ProjNotifyRecent", compose(f"@greater(ticks(if(empty(coalesce({prev_proj}?['Slot11'],'')),'2000-01-01T00:00:00Z',{prev_proj}?['Slot11'])),ticks(addHours(utcNow(),-24)))")),
 
         ("IssueCount", compose(
-            "@add(add(add(add(add(add(add("
+            "@add(add(add(add(add(add(add(add("
             "if(outputs('ConnBad'),1,0),if(outputs('FlowBad'),1,0)),"
             "if(greater(length(body('Incomplete')),0),1,0)),"
             "if(greater(length(body('Unnotified')),0),1,0)),"
             "if(greater(outputs('InboxCount'),0),1,0)),"
             "if(outputs('ClockBad'),1,0)),"
             "if(outputs('DashStale'),1,0)),"
-            "if(outputs('NotifyRecent'),1,0))")),
+            "if(outputs('NotifyRecent'),1,0)),"
+            "if(outputs('ReauthBad'),1,0))")),
         ("Details", compose(
             "@trim(concat("
             f"if(outputs('ConnBad'),concat('Connections broken: ',join(body('Probe_names'),', '),' — Power Automate › Connections › fix or recreate (see Tech Guide).',{NL}),''),"
+            f"if(outputs('ReauthBad'),concat('Connections flagged for reauthentication: ',join(body('ReauthNames'),', '),' — Power Automate › Connections › reconnect (see Tech Guide).',{NL}),''),"
             f"if(outputs('FlowBad'),concat('Flows: ',outputs('FlowProblems'),{NL}),''),"
             f"if(greater(length(body('Incomplete')),0),concat('Incomplete setup (no Planner task / channel post): ',join(body('Incomplete_ids'),', '),' — check the HD3 runs.',{NL}),''),"
             f"if(greater(length(body('Unnotified')),0),concat('Status changed but requester not told: ',join(body('Unnotified_ids'),', '),' — check HD4.',{NL}),''),"
@@ -2421,6 +2447,8 @@ def hd16():
             "item/Slot20": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),if(less({hourET},8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked'))))",
             "item/Slot7": "Dashboard data (HD15)", "item/Share7": "@if(outputs('DashStale'),100,0)",
             "item/Slot21": "@if(outputs('DashStale'),'charts not refreshed for 30 min',if(greater(length(body('Dash_rows')?['value']),0),concat('refreshed ',formatDateTime(convertTimeZone(first(body('Dash_rows')?['value'])?['Modified'],'UTC','" + TZ + "'),'h:mm tt')),'no data yet'))",
+            "item/Slot8": "Reauthentication", "item/Share8": "@if(not(outputs('ConnectionsOk')),-1,if(outputs('ReauthBad'),100,0))",
+            "item/Slot23": "@if(not(outputs('ConnectionsOk')),'could not list connections',if(outputs('ReauthBad'),concat('flagged: ',join(body('ReauthNames'),', ')),concat(string(length(body('Connections_list')?['value'])),' connection(s) checked, all show Connected')))",
             "item/Slot10": f"@if(empty(coalesce({prev}?['Slot10'],'')),'no problems reported',{prev}?['Slot10'])",
             "item/Grad": "@outputs('Details')"})),
         ("Update_project_health", sp("PatchItem", {"table": DASH, "id": DASH_PROJHEALTH, "item/Title": "ProjectHealth",
@@ -2436,6 +2464,7 @@ def hd16():
             "@concat("
             "'<h3>Help desk health — ',if(equals(outputs('IssueCount'),0),'all clear','PROBLEMS FOUND'),'</h3>',"
             "'<p><b>Connections:</b> ',if(outputs('ConnBad'),concat('<span style=\"color:#b00\">broken: ',join(body('Probe_names'),', '),'</span>'),'all answering'),'</p>',"
+            "'<p><b>Reauthentication:</b> ',if(not(outputs('ConnectionsOk')),'could not list connections',if(outputs('ReauthBad'),concat('<span style=\"color:#b00\">flagged: ',join(body('ReauthNames'),', '),'</span>'),'all connections show Connected')),'</p>',"
             "'<p><b>Flows:</b> ',if(not(outputs('FlowsOk')),'could not list flows',if(outputs('FlowBad'),concat('<span style=\"color:#b00\">',outputs('FlowProblems'),'</span>'),'all on, one copy each')),'</p>',"
             "'<p><b>New tickets, last 24h:</b> ',length(body('Recent')?['value']),' created; ',length(body('Incomplete')),' with incomplete setup.</p>',"
             "if(greater(length(body('Incomplete')),0),concat('<ul>',join(body('Incomplete_lines'),''),'</ul>'),''),"
