@@ -151,6 +151,22 @@ def team_msgs(prefix, html, team):
     its post action literally `prefix`), or Logic Apps rejects the flow for duplicate names."""
     return {f"Tell_{prefix}_{i}": scope_msg(f"{prefix}_{i}", who, html) for i, who in enumerate(team)}
 
+def give_techs_contribute(list_guid, id_expr, prefix):
+    """Grant Contribute (roledefid=1073741827 - add/edit/delete items, no site settings/layout access) on one
+    list item to Talal and Joseph individually. Used instead of putting them in the site Owners group (which
+    is Full Control - site settings, views, permissions for others) so they can edit tickets/projects directly
+    in SharePoint without being able to modify page layout. Returns {name: action}, each tech's
+    ensureuser->addroleassignment pair running in parallel with the other tech's."""
+    out = {}
+    for email, tag in ((TECH1, "T1"), (TECH2, "T2")):
+        ens = f"Ensure_{prefix}_{tag}"
+        role = f"Give_{prefix}_{tag}_contribute"
+        out[ens] = sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|" + email + "\"}")
+        out[role] = sp_http("POST",
+            f"_api/web/lists(guid'{list_guid}')/items(@{{{id_expr}}})/roleassignments/addroleassignment(principalid=@{{body('{ens}')?['Id']}},roledefid=1073741827)",
+            after=ra(ens))
+    return out
+
 # ---------- multi-value Person-field helpers (IT Projects Owner / Project Sponsor) ----------
 # Both columns now allow multiple people. The SharePoint connector flattens a multi-value Person field
 # into an array of objects shaped like its single-value form (Email, DisplayName, Claims, ...) - the same
@@ -822,6 +838,7 @@ def hd3():
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Give_techs_contribute", {"type": "Scope", "actions": give_techs_contribute(TICKETS, ID, "tkt")}),
         # external senders have no SharePoint identity: nothing to grant, they work the ticket by email
         ("Has_requester", cond("@and(not(empty(outputs('ReqEmail'))),outputs('IsInternal'))", seq([
             ("Ensure_requester", sp_http("POST", "_api/web/ensureuser",
@@ -2228,8 +2245,8 @@ FLOW_DESCRIPTIONS = {
         "messages to Martin, and parks anything it can't place in the Review folder.",
     "HD2 Form intake": "Creates a ticket from a submitted \"IT Support form\" (Microsoft Forms) response.",
     "HD3 Ticket created": "Runs once on every new ticket: breaks permission inheritance (owners full control, "
-        "requester Read), creates the Planner task, posts to the Teams channel, and emails/Teams-messages the "
-        "requester a confirmation.",
+        "Talal/Joseph Contribute, requester Read), creates the Planner task, posts to the Teams channel, and "
+        "emails/Teams-messages the requester a confirmation.",
     "HD4 Ticket updated": "Runs on a ticket's status/assignment change: notifies the requester, enforces \"a "
         "resolution is required to close\", and moves the Planner task to match.",
     "HD5 Planner task completed": "Completing the ticket's Planner task moves it to Resolved Pending "
@@ -2262,15 +2279,19 @@ FLOW_DESCRIPTIONS = {
         "check separate from the live connection probes), the IT Project Systems panel, the Notifications band, "
         "a 9:30am daily digest, and a Teams alert whenever the issue count changes.",
     "HD17 Fix ticket permissions (run once)": "One-off: stops the Tickets list inheriting site permissions and "
-        "sets per-item permissions (owners full control, requester Read) on every existing ticket.",
+        "sets per-item permissions (owners full control, Talal/Joseph Contribute, requester Read) on every "
+        "existing ticket.",
     "HD18 Quick close (SharePoint)": "Type the resolution below, then click Run flow to assign this ticket to "
         "you, close it, and email the requester.",
     "HD19 Project created": "Runs once on every new IT Project: breaks permission inheritance (owners full "
-        "control, sponsors Read) and emails/Teams-messages the creator, Martin, and every sponsor.",
+        "control, Talal/Joseph Contribute, sponsors Read) and emails/Teams-messages the creator, Martin, and "
+        "every sponsor.",
     "HD20 Project updated": "Runs on a project's status change or a new Sponsor Updates/Internal Notes entry: "
         "notifies the creator, Martin, sponsors and owners as appropriate (sponsors never see internal notes).",
     "HD21 No-update check": "Runs daily at 9am: nudges the creator and Martin (email + Teams) on any active "
         "project untouched for 5+ days, repeating every day until the project is actually updated.",
+    "HD22 Fix project permissions (run once)": "One-off, HD17's twin for IT Projects: sets per-item permissions "
+        "(owners full control, Talal/Joseph Contribute, sponsor Read) on every existing project.",
 }
 
 def hd16():
@@ -2564,7 +2585,8 @@ def build_definition(name, triggers, actions):
 # ---------- HD17 Fix ticket permissions (run once) ----------
 def hd17():
     """One-off: make the Tickets list stop inheriting from the site (drop Visitors/Members), then give every
-    existing ticket its own permissions exactly as HD3 does for new ones (Owners full control, requester Read)."""
+    existing ticket its own permissions exactly as HD3 does for new ones (Owners full control, Talal/Joseph
+    Contribute, requester Read)."""
     L = f"_api/web/lists(guid'{TICKETS}')"
     trig = {"manual": {"type": "Request", "kind": "Button", "inputs": {"schema": {"type": "object", "properties": {}, "required": []}}}}
     it = lambda k: f"items('Each_ticket')?['{k}']"
@@ -2572,6 +2594,7 @@ def hd17():
         ("ReqEmail", compose(f"@toLower(coalesce({it('RequesterEmail')},{it('Requester')}?['EMail'],''))")),
         ("Break_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Owners_on_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Techs_on_item", {"type": "Scope", "actions": give_techs_contribute(TICKETS, it('Id'), "btkt")}),
         ("Has_requester", cond("@and(not(empty(outputs('ReqEmail')))," + is_internal("outputs('ReqEmail')") + ")", seq([
             ("Ensure_requester", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('ReqEmail')}\"}")),
             ("Requester_read", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
@@ -2662,7 +2685,9 @@ def hd19():
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
-        ("Give_sponsors_read", {"type": "Scope", "runAfter": ra("Give_owners_full_control"), "actions": {
+        ("Give_techs_contribute", {"type": "Scope", "runAfter": ra("Give_owners_full_control"),
+            "actions": give_techs_contribute(PROJECTS, ID, "prj")}),
+        ("Give_sponsors_read", {"type": "Scope", "runAfter": ra("Give_techs_contribute"), "actions": {
             "Sponsors_read_loop": {"type": "Foreach", "runAfter": {}, "foreach": "@split(outputs('SponsorEmails'),';')",
                 "actions": seq([
                     ("Sponsor_read_who", compose("@trim(item())")),
@@ -2867,6 +2892,44 @@ def hd21():
         "schedule": {"hours": ["9"], "minutes": [0]}}}
     return "HD21 No-update check", {"Recurrence": daily_trig}, actions
 
+# ---------- HD22 Fix project permissions (run once) ----------
+def hd22():
+    """One-off, HD17's twin for IT Projects: backfill every existing project item with the same permissions
+    HD19 grants a new one (Owners full control, Talal/Joseph Contribute, each Project Sponsor Read). The IT
+    Projects list already has unique permissions with no Visitors/Members on it (confirmed 2026-10-27 - it was
+    broken per-item by HD19 from the start, unlike Tickets, which inherited from the site until HD17 fixed it),
+    so this only needs the per-item backfill loop, not HD17's list-level break/Visitors/Members removal."""
+    L = f"_api/web/lists(guid'{PROJECTS}')"
+    trig = {"manual": {"type": "Request", "kind": "Button", "inputs": {"schema": {"type": "object", "properties": {}, "required": []}}}}
+    it = lambda k: f"items('Each_project')?['{k}']"
+    per_item = seq([
+        ("Break_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
+        ("Owners_on_item", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
+        ("Techs_on_item", {"type": "Scope", "actions": give_techs_contribute(PROJECTS, it('Id'), "bprj")}),
+        # raw REST exposes the person field's email as 'EMail' (capital M) on each array item, unlike the
+        # SharePoint connector trigger's 'Email' casing that people_select()/HD19 use - select it directly.
+        ("SponsorEmails_select", {"type": "Select", "inputs": {
+            "from": f"@coalesce({it('ProjectSponsor')},json('[]'))",
+            "select": "@toLower(coalesce(item()?['EMail'],''))"}}),
+        ("SponsorEmails", compose(f"@{join_emails('SponsorEmails_select', it('SponsorEmail'))}")),
+        ("Sponsors_read_loop", {"type": "Foreach", "foreach": "@split(outputs('SponsorEmails'),';')",
+            "actions": seq([
+                ("Sponsor_read_who", compose("@trim(item())")),
+                ("Sponsor_read_check", cond("@not(empty(outputs('Sponsor_read_who')))", seq([
+                    ("Ensure_sponsor", sp_http("POST", "_api/web/ensureuser", body="{\"logonName\":\"i:0#.f|membership|@{outputs('Sponsor_read_who')}\"}")),
+                    ("Give_sponsor_read", sp_http("POST", f"{L}/items(@{{{it('Id')}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_sponsor')?['Id']}},roledefid=1073741826)")),
+                ]))),
+            ])}),
+    ])
+    acts = seq([
+        ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup?$select=Id")),
+        ("Get_projects", sp_http("GET", f"{L}/items?$select=Id,SponsorEmail,ProjectSponsor/EMail,ProjectSponsor/Title&$expand=ProjectSponsor&$top=5000")),
+        ("Each_project", {"type": "Foreach", "foreach": "@body('Get_projects')?['value']", "actions": per_item,
+                          "runtimeConfiguration": {"concurrency": {"repetitions": 1}}}),
+    ])
+    acts["Get_projects"]["runAfter"] = ra("Get_owner_group")
+    return "HD22 Fix project permissions (run once)", trig, acts
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -2926,7 +2989,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
