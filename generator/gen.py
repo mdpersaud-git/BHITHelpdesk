@@ -2170,7 +2170,7 @@ EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "
 EXPECTED_PROJECT_FLOWS = ["HD19 Project created", "HD20 Project updated", "HD21 No-update check"]
 PROJECT_FLOW_LABELS = {"HD19 Project created": "New project emails (HD19)",
                         "HD20 Project updated": "Project update emails (HD20)",
-                        "HD21 No-update check": "Weekly check-in (HD21)"}
+                        "HD21 No-update check": "Daily check-in (HD21)"}
 PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support account)", "Probe_Teams": "Teams",
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
@@ -2711,15 +2711,19 @@ def hd20():
 
 # ---------- HD21 No-update check ----------
 def hd21():
-    """Runs once a week, Friday at 9am. Every active (not Completed/Cancelled) project whose Modified date is
-    more than 7 days old - meaning nothing, not a status change, a sponsor update or an internal note, has
-    touched it in a week, since every one of those writes also updates Modified - gets one email + Teams
-    message to its creator and Martin asking for a status update."""
+    """Runs every day at 9am (not just weekdays - a project can go stale over a weekend same as any other day).
+    Every active (not Completed/Cancelled) project whose Modified date is more than 5 days old - meaning
+    nothing, not a status change, a sponsor update or an internal note, has touched it in 5 days, since every
+    one of those writes also updates Modified - gets one email + Teams message to its creator and Martin
+    asking for a status update. Because the filter and the run cadence are both unconditional (no LastNotified*
+    stamp the way HD20 has), a project that's gone stale gets re-nudged on every subsequent daily run too, not
+    just once - it only stops once someone actually updates it (which bumps Modified back under 5 days old and
+    drops it out of the filter)."""
     it = lambda k: f"items('Apply_to_each')?['{k}']"
     ID = it('ID')
     status_expr = f"{it('Status')}?['Value']"
     lnk = f"<a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a>"
-    body_html = (f"<p>PRJ-@{{{ID}}}: @{{{it('Title')}}} hasn't had a status change or a new note in over a week"
+    body_html = (f"<p>PRJ-@{{{ID}}}: @{{{it('Title')}}} hasn't had a status change or a new note in over 5 days"
                  f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
                  f"<p>Status: @{{{status_expr}}}</p><p>{lnk}</p>")
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
@@ -2737,11 +2741,14 @@ def hd21():
     loop = {"type": "Foreach", "foreach": "@body('Get_stale_projects')?['value']", "actions": loop_actions}
     actions = seq([
         ("Get_stale_projects", spp("GetItems", {
-            "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ") and Modified lt '@{addDays(utcNow(),-7)}'",
+            "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ") and Modified lt '@{addDays(utcNow(),-5)}'",
             "$top": 200})),
         ("Apply_to_each", loop),
     ])
-    return "HD21 No-update check", {"Recurrence": recurrence([9], ["Friday"])}, actions
+    daily_trig = {"type": "Recurrence", "recurrence": {
+        "frequency": "Day", "interval": 1, "timeZone": TZ,
+        "schedule": {"hours": ["9"], "minutes": [0]}}}
+    return "HD21 No-update check", {"Recurrence": daily_trig}, actions
 
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
