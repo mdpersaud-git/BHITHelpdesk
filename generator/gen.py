@@ -1246,15 +1246,22 @@ def hd6():
             "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
         ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))",
             team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM))),
-        # Once it's assigned, this reminder goes to that tech alone. Only while it's still unassigned does
-        # Joseph get it too (alongside Martin, who's the fallback recipient in that case) — same audience as
-        # the 5-hour unassigned ping above, just repeating daily instead of firing once.
+        # Once it's assigned, this reminder goes to that tech alone (Teams only). Only while it's still
+        # unassigned does Joseph get it too (alongside Martin, who's the fallback recipient in that case) —
+        # same audience as the 5-hour unassigned ping above, just repeating daily instead of firing once —
+        # and, since 2026-10-27, Martin+Joseph also get this one by EMAIL (not just Teams) specifically
+        # while it's still unassigned, per Martin's request.
         ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))", seq([
             ("Tell_tech_open_days", scope_msg("Open_days_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                 f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")),
-            ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))",
-                {"Open_days_msg_joseph": scope_msg("Open_days_joseph_msg", TECH2,
-                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
+            ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))", {
+                "Open_days_msg_joseph": scope_msg("Open_days_joseph_msg", TECH2,
+                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>"),
+                "Email_open_days_unassigned": mail(f"{ME};{TECH2}",
+                    f"[IT-@{{{ID}}}] Still unassigned after @{{div(outputs('S'),{DAY_H})}} business day(s)",
+                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} business day(s) and is still unassigned: @{{{it('Title')}}}</p>"
+                    f"<p>Requested by @{{{req}}}</p><p>{lnk}</p>"),
+            })),
         ]))),
     ])
     for k in ("Unassigned_at_5_hours", "Open_a_full_business_day"):
