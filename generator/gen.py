@@ -2175,13 +2175,57 @@ PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
 
-# Flow-level "Description" (Power Automate flow Details > Edit). SharePoint's button-flow "Run flow" confirm
-# panel shows this under the owner line, so it's the only place to put on-panel instructions for a flow with
-# no adaptive-card UI of its own (see HD18). Keyed by flow display name so a re-import with Update keeps it
-# instead of silently dropping back to blank.
+# Flow-level "Description" (Power Automate flow Details > Edit, also shown in the flow list and when importing
+# a package). SharePoint's button-flow "Run flow" confirm panel shows this under the owner line, so for HD18
+# it doubles as on-panel instructions for a flow with no adaptive-card UI of its own. For every other flow it's
+# just a one-line "what this does" summary, so the flow (or its zip, or an import package) is self-describing
+# without having to go dig through gen.py or IT-Tech-Guide.md. Keyed by flow display name so a re-import with
+# Update keeps it instead of silently dropping back to blank. Added 2026-10-26 for every flow, not just HD18.
 FLOW_DESCRIPTIONS = {
+    "HD1 Email intake": "Reads the shared support mailbox: creates a ticket from a new email, files a reply "
+        "against its existing ticket or project, relays Power Automate alerts and Teams missed-activity "
+        "messages to Martin, and parks anything it can't place in the Review folder.",
+    "HD2 Form intake": "Creates a ticket from a submitted \"IT Support form\" (Microsoft Forms) response.",
+    "HD3 Ticket created": "Runs once on every new ticket: breaks permission inheritance (owners full control, "
+        "requester Read), creates the Planner task, posts to the Teams channel, and emails/Teams-messages the "
+        "requester a confirmation.",
+    "HD4 Ticket updated": "Runs on a ticket's status/assignment change: notifies the requester, enforces \"a "
+        "resolution is required to close\", and moves the Planner task to match.",
+    "HD5 Planner task completed": "Completing the ticket's Planner task moves it to Resolved Pending "
+        "Confirmation, but only if a resolution is already on file - otherwise reopens the task and asks for one.",
+    "HD6 Hourly clock": "Runs hourly 7am-9pm: reminds the requester at 24h and auto-closes a resolved ticket "
+        "after 72h with no reply.",
+    "HD7 My open tickets": "\"My open tickets\" self-service Microsoft Forms lookup: a tech requests their own "
+        "open/assigned tickets back.",
+    "HD8 Daily report": "Runs once at 9pm: emails Martin a report of tickets open longer than a business day "
+        "and tickets unassigned for 4+ hours.",
+    "HD9 Card actions": "Handles button clicks on the Teams adaptive card HD3/HD4 post (assign to me, change "
+        "status, etc.) and updates the ticket accordingly.",
+    "HD10 Ask requester in Teams": "Retired - requests for more info from a requester now go out as ordinary "
+        "IT Support Teams messages, with replies handled by HD12.",
+    "HD11 Tech thread replies": "A tech's own email reply inside a ticket's thread gets appended to the "
+        "ticket's Conversation log.",
+    "HD12 Requester replies in Teams": "A requester's (or project sponsor's/owner's) reply in the IT Support "
+        "Teams chat gets matched back to their ticket or project and logged as a new Conversation/SponsorUpdates "
+        "entry.",
+    "HD13 Setup pending-replies list (run once)": "One-off: creates the \"Pending replies\" SharePoint list "
+        "used to hold a requester's reply until they say which ticket it's for. Leave off after running once.",
+    "HD14 Teams app intake": "\"Report an IT issue\" Teams app form creates a ticket (source: \"Teams form\"). "
+        "Owned by Martin's account, not IT_Support - see IT-Tech-Guide.md.",
+    "HD15 Dashboard stats": "Refreshes every stat behind the IT Dashboard page - ticket and project donuts, "
+        "KPI tiles, trend/service/workload charts - alongside the ticket stats.",
+    "HD16 Health check v2": "Runs hourly 24/7: the System Health panel's cards, the IT Project Systems panel, "
+        "the Notifications band, a 9:30am daily digest, and a Teams alert whenever the issue count changes.",
+    "HD17 Fix ticket permissions (run once)": "One-off: stops the Tickets list inheriting site permissions and "
+        "sets per-item permissions (owners full control, requester Read) on every existing ticket.",
     "HD18 Quick close (SharePoint)": "Type the resolution below, then click Run flow to assign this ticket to "
-                                      "you, close it, and email the requester.",
+        "you, close it, and email the requester.",
+    "HD19 Project created": "Runs once on every new IT Project: breaks permission inheritance (owners full "
+        "control, sponsors Read) and emails/Teams-messages the creator, Martin, and every sponsor.",
+    "HD20 Project updated": "Runs on a project's status change or a new Sponsor Updates/Internal Notes entry: "
+        "notifies the creator, Martin, sponsors and owners as appropriate (sponsors never see internal notes).",
+    "HD21 No-update check": "Runs daily at 9am: nudges the creator and Martin (email + Teams) on any active "
+        "project untouched for 5+ days, repeating every day until the project is actually updated.",
 }
 
 def hd16():

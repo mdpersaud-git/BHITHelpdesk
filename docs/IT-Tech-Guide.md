@@ -207,6 +207,8 @@ HD1 Email intake · HD2 Form intake · HD3 Ticket created · HD4 Ticket updated 
 
 *Flows are generated from `generator/gen.py`. Never edit the live flows directly without updating the generator.*
 
+Every flow also carries a one-line "what this does" summary in its own **Description** field (`FLOW_DESCRIPTIONS` in `generator/gen.py`, set 2026-10-26) — visible on the flow's Details page in Power Automate, in the My flows list, and when importing its zip, so the flow (or a zip sitting on OneDrive) is self-describing without having to open `gen.py` or come back here. For HD18 this field doubles as the on-screen instructions on SharePoint's "Run flow" confirm panel (it has no adaptive-card UI of its own); for every other flow it's just the summary. Add new flows to this dict too — a flow with no entry silently imports with a blank description instead of erroring.
+
 Live flow IDs (environment Default-26e851a0…, rebuilt 2026-10-21 after the Outlook connection was replaced). When importing a zip with **Update**, pick the flow with this ID — never *Create as new*:
 
 | Flow | ID (first 8) | Flow | ID (first 8) |
