@@ -10,7 +10,7 @@
     },
     {
       "displayname": "People & updates",
-      "fields": ["IT Support", "Project Sponsor", "Sponsor Updates", "Internal Notes (Only visible to IT)", "Attachments"]
+      "fields": ["IT Team Lead", "Project Sponsor", "Sponsor Updates", "Internal Notes (Only visible to IT)", "Attachments"]
     }
   ]
 }

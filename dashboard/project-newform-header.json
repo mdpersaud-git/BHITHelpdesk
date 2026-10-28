@@ -80,15 +80,14 @@
               "style": {
                 "font-size": "34px",
                 "font-weight": "600",
-                "letter-spacing": "4px",
-                "text-transform": "uppercase",
+                "letter-spacing": "1px",
                 "line-height": "1.12",
                 "color": "#ffffff"
               }
             },
             {
               "elmType": "div",
-              "txtContent": "=if([$Title] == '', 'Branthaven · IT Projects · Sponsor updates', 'Branthaven · IT Projects tracker')",
+              "txtContent": "=if([$Title] == '', 'BRANTHAVEN · IT Projects · Sponsor updates', 'BRANTHAVEN · IT Projects tracker')",
               "style": {
                 "font-size": "13px",
                 "color": "#9fb0d6",
