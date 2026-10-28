@@ -87,7 +87,7 @@
             },
             {
               "elmType": "div",
-              "txtContent": "=if([$Title] == '', 'BRANTHAVEN · IT Projects · Sponsor updates', 'BRANTHAVEN · IT Projects tracker')",
+              "txtContent": "=if([$Title] == '', 'BRANTHAVEN · IT Projects · Sponsor updates', 'BRANTHAVEN · IT Projects tracker · PRJ-' + [$ID])",
               "style": {
                 "font-size": "13px",
                 "color": "#9fb0d6",
