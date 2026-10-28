@@ -2,61 +2,80 @@
   "elmType": "div",
   "style": {
     "display": "flex",
-    "align-items": "center",
-    "gap": "14px",
-    "padding": "18px 20px",
-    "background-color": "#2563eb",
+    "flex-direction": "column",
+    "padding": "14px 18px 13px",
+    "background-color": "#0f172a",
     "border-radius": "8px",
+    "border-bottom": "2px solid #2563eb",
     "color": "#ffffff",
     "margin-bottom": "8px"
   },
   "children": [
     {
       "elmType": "div",
+      "txtContent": "=if([$Title] == '', 'IT Projects / New', 'IT Projects / Edit')",
       "style": {
-        "display": "flex",
-        "align-items": "center",
-        "justify-content": "center",
-        "width": "42px",
-        "height": "42px",
-        "border-radius": "10px",
-        "background-color": "rgba(255,255,255,0.18)",
-        "flex-shrink": "0"
-      },
-      "children": [
-        {
-          "elmType": "span",
-          "attributes": {
-            "iconName": "ProjectCollection"
-          },
-          "style": {
-            "font-size": "20px",
-            "color": "#ffffff"
-          }
-        }
-      ]
+        "font-size": "11px",
+        "color": "#93a1c4",
+        "margin-bottom": "8px"
+      }
     },
     {
       "elmType": "div",
+      "style": {
+        "display": "flex",
+        "align-items": "center",
+        "gap": "12px"
+      },
       "children": [
         {
           "elmType": "div",
-          "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
           "style": {
-            "font-size": "18px",
-            "font-weight": "600",
-            "line-height": "1.2",
-            "color": "#ffffff"
-          }
+            "display": "flex",
+            "align-items": "center",
+            "justify-content": "center",
+            "width": "34px",
+            "height": "34px",
+            "border-radius": "8px",
+            "background-color": "rgba(255,255,255,0.1)",
+            "flex-shrink": "0"
+          },
+          "children": [
+            {
+              "elmType": "span",
+              "attributes": {
+                "iconName": "ProjectCollection"
+              },
+              "style": {
+                "font-size": "18px",
+                "color": "#ffffff"
+              }
+            }
+          ]
         },
         {
           "elmType": "div",
-          "txtContent": "=if([$Title] == '', 'Add a project to the IT Projects tracker', 'IT Projects tracker')",
-          "style": {
-            "font-size": "12px",
-            "color": "#dbe7ff",
-            "margin-top": "2px"
-          }
+          "children": [
+            {
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
+              "style": {
+                "font-size": "18px",
+                "font-weight": "600",
+                "line-height": "1.2",
+                "color": "#ffffff"
+              }
+            },
+            {
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'Add a project to the IT Projects tracker', 'IT Projects tracker')",
+              "style": {
+                "font-size": "12px",
+                "color": "#9fb0d6",
+                "margin-top": "2px"
+              }
+            }
+          ]
         }
       ]
     }
