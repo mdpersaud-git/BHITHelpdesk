@@ -13,9 +13,12 @@
   "children": [
     {
       "elmType": "div",
-      "txtContent": "=if([$Title] == '', 'IT Projects / New', 'IT Projects / Edit')",
+      "txtContent": "BRANTHAVEN > Projects",
       "style": {
-        "font-size": "11px",
+        "font-size": "10px",
+        "font-weight": "600",
+        "letter-spacing": "0.6px",
+        "text-transform": "uppercase",
         "color": "#93a1c4",
         "margin-bottom": "8px"
       }
