@@ -1,35 +1,54 @@
 {
   "elmType": "div",
   "style": {
+    "position": "relative",
     "display": "flex",
-    "flex-direction": "column",
-    "padding": "16px 20px 15px",
+    "align-items": "center",
+    "justify-content": "space-between",
+    "gap": "16px",
+    "padding": "30px 28px",
     "background-color": "#0f172a",
-    "border-radius": "10px",
+    "border-radius": "8px",
     "border-bottom": "2px solid #0e7490",
     "color": "#ffffff",
-    "margin-bottom": "8px"
+    "margin-bottom": "8px",
+    "overflow": "hidden"
   },
   "children": [
     {
       "elmType": "div",
-      "txtContent": "BRANTHAVEN > Projects",
       "style": {
-        "font-size": "10px",
-        "font-weight": "600",
-        "letter-spacing": "0.6px",
-        "text-transform": "uppercase",
-        "color": "#8fd3e0",
-        "margin-bottom": "9px"
-      }
+        "position": "absolute",
+        "top": "-55px",
+        "right": "-25px",
+        "width": "170px",
+        "height": "170px",
+        "border-radius": "50%",
+        "background-color": "rgba(255,255,255,0.05)"
+      },
+      "children": []
     },
     {
       "elmType": "div",
       "style": {
+        "position": "absolute",
+        "bottom": "-70px",
+        "right": "90px",
+        "width": "130px",
+        "height": "130px",
+        "border-radius": "50%",
+        "background-color": "rgba(255,255,255,0.04)"
+      },
+      "children": []
+    },
+    {
+      "elmType": "div",
+      "style": {
+        "position": "relative",
+        "z-index": "1",
         "display": "flex",
         "align-items": "center",
-        "justify-content": "space-between",
-        "gap": "12px"
+        "gap": "16px"
       },
       "children": [
         {
@@ -37,90 +56,83 @@
           "style": {
             "display": "flex",
             "align-items": "center",
-            "gap": "12px"
-          },
-          "children": [
-            {
-              "elmType": "div",
-              "style": {
-                "display": "flex",
-                "align-items": "center",
-                "justify-content": "center",
-                "width": "42px",
-                "height": "42px",
-                "border-radius": "9px",
-                "background-color": "rgba(255,255,255,0.14)",
-                "flex-shrink": "0"
-              },
-              "children": [
-                {
-                  "elmType": "span",
-                  "attributes": { "iconName": "ProjectCollection" },
-                  "style": { "font-size": "22px", "color": "#ffffff" }
-                }
-              ]
-            },
-            {
-              "elmType": "div",
-              "children": [
-                {
-                  "elmType": "div",
-                  "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
-                  "style": {
-                    "font-size": "26px",
-                    "font-weight": "800",
-                    "letter-spacing": "0.5px",
-                    "text-transform": "uppercase",
-                    "line-height": "1.15",
-                    "color": "#ffffff"
-                  }
-                },
-                {
-                  "elmType": "div",
-                  "txtContent": "=if([$Title] == '', 'Branthaven · IT Projects · Sponsor updates', 'Branthaven · IT Projects tracker')",
-                  "style": {
-                    "font-size": "12px",
-                    "color": "#9fb0d6",
-                    "margin-top": "3px"
-                  }
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "elmType": "div",
-          "style": {
-            "display": "flex",
-            "align-items": "center",
-            "gap": "6px",
-            "padding": "6px 12px",
-            "background-color": "rgba(255,255,255,0.12)",
-            "border-radius": "20px",
+            "justify-content": "center",
+            "width": "52px",
+            "height": "52px",
+            "border-radius": "10px",
+            "background-color": "rgba(255,255,255,0.14)",
             "flex-shrink": "0"
           },
           "children": [
             {
               "elmType": "span",
+              "attributes": { "iconName": "ProjectCollection" },
+              "style": { "font-size": "26px", "color": "#ffffff" }
+            }
+          ]
+        },
+        {
+          "elmType": "div",
+          "children": [
+            {
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
               "style": {
-                "width": "8px",
-                "height": "8px",
-                "border-radius": "50%",
-                "background-color": "#22c55e",
-                "flex-shrink": "0"
+                "font-size": "34px",
+                "font-weight": "800",
+                "letter-spacing": "0.8px",
+                "text-transform": "uppercase",
+                "line-height": "1.12",
+                "color": "#ffffff"
               }
             },
             {
-              "elmType": "span",
-              "txtContent": "=if([$Title] == '', 'NEW PROJECT', 'EDITING')",
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'Branthaven · IT Projects · Sponsor updates', 'Branthaven · IT Projects tracker')",
               "style": {
-                "font-size": "10px",
-                "font-weight": "700",
-                "letter-spacing": "0.5px",
-                "color": "#ffffff"
+                "font-size": "13px",
+                "color": "#9fb0d6",
+                "margin-top": "6px",
+                "letter-spacing": "0.2px"
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "elmType": "div",
+      "style": {
+        "position": "relative",
+        "z-index": "1",
+        "display": "flex",
+        "align-items": "center",
+        "gap": "7px",
+        "padding": "8px 15px",
+        "background-color": "rgba(255,255,255,0.14)",
+        "border-radius": "20px",
+        "flex-shrink": "0"
+      },
+      "children": [
+        {
+          "elmType": "span",
+          "style": {
+            "width": "8px",
+            "height": "8px",
+            "border-radius": "50%",
+            "background-color": "#22c55e",
+            "flex-shrink": "0"
+          }
+        },
+        {
+          "elmType": "span",
+          "txtContent": "=if([$Title] == '', 'NEW PROJECT', 'EDITING')",
+          "style": {
+            "font-size": "11px",
+            "font-weight": "700",
+            "letter-spacing": "0.5px",
+            "color": "#ffffff"
+          }
         }
       ]
     }
