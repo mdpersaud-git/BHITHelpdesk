@@ -2660,11 +2660,14 @@ def hd19():
     """Fires when a project is added to the IT Projects list (entered directly in SharePoint by Martin or a
     tech). Breaks the new item's permission inheritance exactly as HD3 does for tickets - Owners full control,
     then Read for every Project Sponsor on just that one item, nothing else on the list - then emails +
-    Teams-messages the creator, Martin and every sponsor. Owner and Project Sponsor both allow multiple
-    people (SharePoint connector exposes a multi-value Person field as an array of {Email,DisplayName,...}
-    items, same keys as the old single-value field, just array-wrapped); ProjectSponsor also keeps a
-    plain-text SponsorEmail fallback column from before it supported multiple people, used only when no
-    Project Sponsor person is set. Stamps LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen
+    Teams-messages the creator, Martin, every sponsor AND every Owner (IT Team Lead). Owners used to only
+    hear about a project via an Internal Notes entry (HD20's internal_branch), never on creation - found
+    2026-10-28 when Joseph, assigned Owner on PRJ-6, didn't get its creation email. Owner and Project
+    Sponsor both allow multiple people (SharePoint connector exposes a multi-value Person field as an
+    array of {Email,DisplayName,...} items, same keys as the old single-value field, just array-wrapped);
+    ProjectSponsor also keeps a plain-text SponsorEmail fallback column from before it supported multiple
+    people, used only when no Project Sponsor person is set (Owner has no equivalent fallback column).
+    Stamps LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen
     so HD20 has a clean baseline to compare against on the next edit."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
@@ -2676,12 +2679,14 @@ def hd19():
         ("Sponsor_emails_select", people_select("Sponsor_emails_select", pt('ProjectSponsor'), "Email")["Sponsor_emails_select"]),
         ("Sponsor_names_select", people_select("Sponsor_names_select", pt('ProjectSponsor'), "DisplayName")["Sponsor_names_select"]),
         ("Owner_names_select", people_select("Owner_names_select", pt('Owner'), "DisplayName")["Owner_names_select"]),
+        ("Owner_emails_select", people_select("Owner_emails_select", pt('Owner'), "Email")["Owner_emails_select"]),
         ("SponsorEmails", compose(f"@{join_emails('Sponsor_emails_select', sponsor_email_fallback)}")),
         ("SponsorNames", compose(
             f"@if(empty(body('Sponsor_emails_select')),"
             f"if(empty(coalesce({sponsor_email_fallback},'')),'None',{sponsor_email_fallback}),"
             f"{join_names('Sponsor_names_select', 'None')})")),
         ("OwnerNames", compose(f"@{join_names('Owner_names_select', 'Not yet assigned')}")),
+        ("OwnerEmails", compose(f"@{join_emails('Owner_emails_select')}")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
         ("Give_owners_full_control", sp_http("POST", f"_api/web/lists(guid'{PROJECTS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Get_owner_group')?['Id']}},roledefid=1073741829)")),
@@ -2712,7 +2717,7 @@ def hd19():
             "runAfter": ra("Recipients")}),
         ("Recipients", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
-            "union(createArray('" + ME + "'),split(outputs('SponsorEmails'),';'))),';')"),
+            "union(createArray('" + ME + "'),union(split(outputs('SponsorEmails'),';'),split(outputs('OwnerEmails'),';')))),';')"),
             "runAfter": ra("Give_sponsors_read", status=("Succeeded", "Failed"))}),
         ("Martin_new_project", {**scope_msg("Martin_new_project_msg",
             ME, f"<p><b>New project: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>Status: @{{{pt('Status/Value')}}} · Owner: @{{outputs('OwnerNames')}}</p>"),
@@ -2725,14 +2730,18 @@ def hd19():
             f"<p><b>A new IT project lists you as sponsor: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>",
             exclude=["outputs('CreatorEmail')"])["Tell_sponsors"],
             "runAfter": ra("Tell_creator", status=("Succeeded", "Failed"))}),
+        ("Tell_owners", {**notify_each("Tell_owners", "outputs('OwnerEmails')",
+            f"<p><b>A new IT project lists you as IT Team Lead: PRJ-@{{{ID}}} @{{{pt('Title')}}}</b></p><p>You'll get a message here each time it's updated.</p>",
+            exclude=["outputs('CreatorEmail')"])["Tell_owners"],
+            "runAfter": ra("Tell_sponsors", status=("Succeeded", "Failed"))}),
         ("Update_item", {**spp("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
             "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
             "item/LastNotifiedSponsorLen": f"@length(coalesce({pt('SponsorUpdates')},''))",
             "item/LastNotifiedInternalLen": f"@length(coalesce({pt('InternalNotes')},''))"}),
-            "runAfter": ra("Tell_sponsors", status=("Succeeded", "Failed"))}),
+            "runAfter": ra("Tell_owners", status=("Succeeded", "Failed"))}),
     ])
-    actions.update(self_check("Health", ["Give_sponsors_read", "Tell_creator", "Tell_sponsors"],
+    actions.update(self_check("Health", ["Give_sponsors_read", "Tell_creator", "Tell_sponsors", "Tell_owners"],
         f"[Help desk health] HD19 problem on a new project",
         f"Project <b>PRJ-@{{{ID}}}</b> (@{{{pt('Title')}}}) was created, but these steps did not complete:",
         f"concat('PRJ-',{ID},' (created)')",
@@ -2749,11 +2758,13 @@ def hd20():
     (LastNotifiedStatus/LastNotifiedSponsorLen/LastNotifiedInternalLen - stamped by HD19 on creation and by this
     flow at the end of every run) to find what's actually new; a plain re-trigger off its own Update_item write
     (see CLAUDE.md) finds nothing changed and exits quietly, same as HD4 already relies on for tickets.
-    A Status change or a new Sponsor Updates entry notifies the project's creator, Martin and every Project
-    Sponsor (email + Teams; Owner/Project Sponsor both allow multiple people - see hd19()'s docstring for the
-    multi-value Person field shape and the legacy plain-text SponsorEmail fallback). A new Internal Notes
-    entry notifies only Martin and the project's Owner(s) - never the sponsor, and never the creator unless
-    they are also an Owner."""
+    A Status change or a new Sponsor Updates entry notifies the project's creator, Martin, every Project
+    Sponsor AND every Owner (IT Team Lead) (email + Teams; Owner/Project Sponsor both allow multiple people -
+    see hd19()'s docstring for the multi-value Person field shape and the legacy plain-text SponsorEmail
+    fallback; Owner has no such fallback). Owners used to hear about this only via the separate Internal
+    Notes path below, never a status/sponsor-facing change - found 2026-10-28 alongside the same HD19 gap.
+    A new Internal Notes entry notifies only Martin and the project's Owner(s) - never the sponsor, and
+    never the creator unless they are also an Owner."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     V = pt('Status/Value')
@@ -2785,10 +2796,12 @@ def hd20():
         ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("NoteLine")}),
         ("Sponsor_emails_select", {**people_select("Sponsor_emails_select", pt('ProjectSponsor'), "Email")["Sponsor_emails_select"], "runAfter": ra("CreatorEmail")}),
         ("SponsorEmails", {**compose(f"@{join_emails('Sponsor_emails_select', pt('SponsorEmail'))}"), "runAfter": ra("Sponsor_emails_select")}),
+        ("Owner_emails_select_su", {**people_select("Owner_emails_select_su", pt('Owner'), "Email")["Owner_emails_select_su"], "runAfter": ra("SponsorEmails")}),
+        ("OwnerEmails_su", {**compose(f"@{join_emails('Owner_emails_select_su')}"), "runAfter": ra("Owner_emails_select_su")}),
         ("Recipients", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
-            "union(createArray('" + ME + "'),split(outputs('SponsorEmails'),';'))),';')"),
-            "runAfter": ra("SponsorEmails")}),
+            "union(createArray('" + ME + "'),union(split(outputs('SponsorEmails'),';'),split(outputs('OwnerEmails_su'),';')))),';')"),
+            "runAfter": ra("OwnerEmails_su")}),
         ("Email_sponsor_update", {**mail("@outputs('Recipients')", f"[PRJ-@{{{ID}}}] Update on project: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>{MARKER}</p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"
@@ -2805,6 +2818,10 @@ def hd20():
             f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}",
             exclude=["outputs('CreatorEmail')"])["Tell_sponsors_update"],
             "runAfter": ra("Tell_creator_sponsor_update", status=("Succeeded", "Failed"))}),
+        ("Tell_owners_sponsor_update", {**notify_each("Tell_owners_sponsor_update", "outputs('OwnerEmails_su')",
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}",
+            exclude=["outputs('CreatorEmail')"])["Tell_owners_sponsor_update"],
+            "runAfter": ra("Tell_sponsors_update", status=("Succeeded", "Failed"))}),
     ])
     internal_branch = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
