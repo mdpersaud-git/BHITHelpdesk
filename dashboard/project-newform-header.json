@@ -3,10 +3,10 @@
   "style": {
     "display": "flex",
     "flex-direction": "column",
-    "padding": "14px 18px 13px",
+    "padding": "16px 20px 15px",
     "background-color": "#0f172a",
-    "border-radius": "8px",
-    "border-bottom": "2px solid #2563eb",
+    "border-radius": "10px",
+    "border-bottom": "2px solid #0e7490",
     "color": "#ffffff",
     "margin-bottom": "8px"
   },
@@ -19,8 +19,8 @@
         "font-weight": "600",
         "letter-spacing": "0.6px",
         "text-transform": "uppercase",
-        "color": "#93a1c4",
-        "margin-bottom": "8px"
+        "color": "#8fd3e0",
+        "margin-bottom": "9px"
       }
     },
     {
@@ -28,6 +28,7 @@
       "style": {
         "display": "flex",
         "align-items": "center",
+        "justify-content": "space-between",
         "gap": "12px"
       },
       "children": [
@@ -36,47 +37,87 @@
           "style": {
             "display": "flex",
             "align-items": "center",
-            "justify-content": "center",
-            "width": "40px",
-            "height": "40px",
-            "border-radius": "9px",
-            "background-color": "rgba(255,255,255,0.12)",
-            "flex-shrink": "0"
+            "gap": "12px"
           },
           "children": [
             {
-              "elmType": "span",
-              "attributes": {
-                "iconName": "ProjectCollection"
-              },
+              "elmType": "div",
               "style": {
-                "font-size": "21px",
-                "color": "#ffffff"
-              }
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                "width": "42px",
+                "height": "42px",
+                "border-radius": "9px",
+                "background-color": "rgba(255,255,255,0.14)",
+                "flex-shrink": "0"
+              },
+              "children": [
+                {
+                  "elmType": "span",
+                  "attributes": { "iconName": "ProjectCollection" },
+                  "style": { "font-size": "22px", "color": "#ffffff" }
+                }
+              ]
+            },
+            {
+              "elmType": "div",
+              "children": [
+                {
+                  "elmType": "div",
+                  "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
+                  "style": {
+                    "font-size": "26px",
+                    "font-weight": "800",
+                    "letter-spacing": "0.5px",
+                    "text-transform": "uppercase",
+                    "line-height": "1.15",
+                    "color": "#ffffff"
+                  }
+                },
+                {
+                  "elmType": "div",
+                  "txtContent": "=if([$Title] == '', 'Branthaven · IT Projects · Sponsor updates', 'Branthaven · IT Projects tracker')",
+                  "style": {
+                    "font-size": "12px",
+                    "color": "#9fb0d6",
+                    "margin-top": "3px"
+                  }
+                }
+              ]
             }
           ]
         },
         {
           "elmType": "div",
+          "style": {
+            "display": "flex",
+            "align-items": "center",
+            "gap": "6px",
+            "padding": "6px 12px",
+            "background-color": "rgba(255,255,255,0.12)",
+            "border-radius": "20px",
+            "flex-shrink": "0"
+          },
           "children": [
             {
-              "elmType": "div",
-              "txtContent": "=if([$Title] == '', 'New IT Project', [$Title])",
+              "elmType": "span",
               "style": {
-                "font-size": "24px",
-                "font-weight": "700",
-                "letter-spacing": "-0.3px",
-                "line-height": "1.15",
-                "color": "#ffffff"
+                "width": "8px",
+                "height": "8px",
+                "border-radius": "50%",
+                "background-color": "#22c55e",
+                "flex-shrink": "0"
               }
             },
             {
-              "elmType": "div",
-              "txtContent": "=if([$Title] == '', 'Add a project to the IT Projects tracker', 'IT Projects tracker')",
+              "elmType": "span",
+              "txtContent": "=if([$Title] == '', 'NEW PROJECT', 'EDITING')",
               "style": {
-                "font-size": "12px",
-                "color": "#9fb0d6",
-                "margin-top": "2px"
+                "font-size": "10px",
+                "font-weight": "700",
+                "letter-spacing": "0.5px",
+                "color": "#ffffff"
               }
             }
           ]
