@@ -1,0 +1,16 @@
+{
+  "sections": [
+    {
+      "displayname": "Overview",
+      "fields": ["Title", "Description", "Category"]
+    },
+    {
+      "displayname": "Timeline",
+      "fields": ["Status", "Priority", "Start Date", "Target Date", "% Complete"]
+    },
+    {
+      "displayname": "People & updates",
+      "fields": ["Owner", "Project Sponsor", "Sponsor Updates", "Internal Notes", "Attachments"]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "elmType": "div",
+  "style": {
+    "display": "flex",
+    "align-items": "center",
+    "gap": "8px",
+    "padding": "10px 14px",
+    "background-color": "#f8fafc",
+    "border": "1px solid #e2e8f0",
+    "border-radius": "6px",
+    "margin-top": "4px",
+    "font-size": "12px",
+    "color": "#64748b"
+  },
+  "children": [
+    {
+      "elmType": "span",
+      "attributes": {
+        "iconName": "Info"
+      },
+      "style": {
+        "color": "#2563eb",
+        "font-size": "14px",
+        "flex-shrink": "0"
+      }
+    },
+    {
+      "elmType": "span",
+      "txtContent": "Sponsors are notified by email once this project is saved."
+    }
+  ]
+}
