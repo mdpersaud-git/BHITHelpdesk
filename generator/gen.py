@@ -2370,6 +2370,9 @@ FLOW_DESCRIPTIONS = {
     "HD26 Project task overdue check": "Runs daily at 9:15am: nudges the task's assignee and the parent "
         "project's Owner(s)/creator (email + Teams) on any not-Completed task that's past its Due Date, or has "
         "no Due Date and hasn't been touched in 5+ days - repeating every day until resolved.",
+    "HD27 Add project task (from project)": "Runs from the 'Add task' button on the IT Projects ID column: "
+        "collects a task title (and optional assignee email) in the Run-flow panel, then creates that row in "
+        "Project Tasks with ProjectID already set to the clicked project - HD24 takes it from there.",
 }
 
 def hd16():
@@ -3391,6 +3394,44 @@ def hd26():
         "schedule": {"hours": ["9"], "minutes": [15]}}}
     return "HD26 Project task overdue check", {"Recurrence": daily_trig}, actions
 
+# ---------- HD27 Add project task (from project) ----------
+def hd27():
+    """Triggered by an "Add task" button (SharePoint "For a selected item" trigger, same mechanism HD18 uses
+    for Tickets' Quick close) placed on the IT Projects list's PRJ-<n> ID-column formatting (both Active
+    Projects and Full Detail views). The IT Projects list has no Power Apps form - app/HD14-app-build-guide.md
+    documents the one unrelated canvas app this codebase has (ticket intake only) - and a plain NewForm.aspx
+    link with a ?ProjectID=<n> query-string pre-fill does NOT work on this list in this tenant (confirmed live
+    2026-10-29: the field came up as a blank "Enter a number" placeholder), so a plain link-out button would
+    leave the tech typing the ProjectID by hand. Instead this flow collects the task's title (required) and,
+    optionally, the assignee's email, directly in the "Run flow" panel's own input boxes, then creates the
+    Project Tasks row itself with ProjectID already set to the clicked project. HD24 (Project task created)
+    then fires on that new row exactly as it would for a task added directly in Project Tasks - sending the
+    usual creation notifications and patching the parent project's Task Progress rollup - so this flow does
+    none of that itself, only the creation."""
+    trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
+        "operationId": "GetItemHybridTriggerSchema",
+        "parameters": {"dataset": SITE, "table": PROJECTS},
+        "schema": {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {
+            "text": {"description": "What the task is", "title": "Task title", "type": "string",
+                     "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
+            "text_1": {"description": "Optional: assignee's email", "title": "Assign to (optional)", "type": "string",
+                       "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
+            "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
+                       "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
+        "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
+        "splitOn": "@triggerBody()['rows']"}}
+    acts = seq([
+        ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
+        ("TaskTitle", compose("@trim(coalesce(triggerBody()?['text'],''))")),
+        ("AssigneeEmail", compose("@trim(toLower(coalesce(triggerBody()?['text_1'],'')))")),
+        ("Create_task", spt("PostItem", {
+            "item/Title": "@outputs('TaskTitle')",
+            "item/ProjectID": "@outputs('ProjectId')",
+            "item/Status/Value": PT_STATUSES[0],
+            "item/Assigned_x0020_To/Claims": "@if(empty(outputs('AssigneeEmail')),null,outputs('AssigneeEmail'))"})),
+    ])
+    return "HD27 Add project task (from project)", trig, acts
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -3450,7 +3491,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
