@@ -3220,7 +3220,13 @@ def hd25():
     status change (e.g. back to In Progress) doesn't get its own notification - only completion and reassignment
     are noteworthy enough to interrupt anyone, and HD26's daily sweep already keeps an unfinished task visible.
     Recomputes and patches the parent project's Task Progress rollup whenever Status changed (a reassignment
-    alone doesn't move the count). Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way."""
+    alone doesn't move the count). Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way.
+    The trigger-level condition also requires LastNotifiedStatus to already be stamped (non-empty) before this
+    flow runs at all - without that guard, a brand-new task's blank LastNotifiedStatus/LastNotifiedAssignee
+    makes status_changed/assignee_changed look true on the very item-created event HD24 is already handling,
+    so HD25 races HD24 and fires its own (duplicate) reassignment notification before HD24 ever gets to stamp
+    LastNotifiedAssignee. Once HD24 finishes its first pass on a task, LastNotifiedStatus is never blank again,
+    so every genuine later edit still evaluates normally."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
@@ -3318,8 +3324,9 @@ def hd25():
               "Get_project_tasks"),
         after=ra("Update_task", status=("Succeeded", "Failed", "Skipped")),
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
+    already_processed_once = f"not(empty(coalesce({pt('LastNotifiedStatus')},'')))"
     trig = sp_trigger("GetOnUpdatedItems", PROJTASKS)
-    trig["conditions"] = [{"expression": f"@or({status_changed},{assignee_changed})"}]
+    trig["conditions"] = [{"expression": f"@and({already_processed_once},or({status_changed},{assignee_changed}))"}]
     return "HD25 Project task updated v2", {"When_an_item_is_created_or_modified": trig}, actions
 
 # ---------- HD26 Project task overdue check ----------
