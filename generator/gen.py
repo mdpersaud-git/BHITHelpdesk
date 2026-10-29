@@ -14,6 +14,13 @@ PRJ_STATUSES = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Appr
 PRJ_ACTIVE = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Approval"]   # not Completed/Cancelled
 PRJ_CATEGORIES = ["Infrastructure", "Security", "Software Rollout", "Network", "Hardware Refresh", "Process Improvement", "Other"]
 # keep PRJ_STATUSES/PRJ_CATEGORIES in sync with: the IT Projects list's Status/Category choice columns
+PROJTASKS = "233c8423-83f7-4d1f-83fa-7efca4849a7a"   # "Project Tasks" list, added 2026-10-29 - sub-tasks within an IT Project
+PT_STATUSES = ["Not Started", "In Progress", "Completed"]
+# keep PT_STATUSES in sync with: the Project Tasks list's Status choice column
+# Project Tasks columns (internal names, SharePoint auto-encoded spaces to _x0020_ - confirmed live, don't "clean" these):
+#   Title, ProjectID (Number), Assigned_x0020_To (Person), Status (Choice), Due_x0020_Date (DateTime, DateOnly),
+#   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text)
+# IT Projects rollup column added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 tasks complete")
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
 EXTERNAL_SENDERS = "37b12028-370c-4b21-b31c-11362129c7fe"   # "External Senders" allow-list: Title = domain or full address
 MBX = "IT_Support@branthaven.com"
@@ -485,6 +492,12 @@ def spp(opid, params, after=None):
     """Like sp(), but against the IT Projects list instead of Tickets."""
     p = dict(params)
     p["table"] = PROJECTS
+    return sp(opid, p, after)
+
+def spt(opid, params, after=None):
+    """Like sp(), but against the Project Tasks list instead of Tickets."""
+    p = dict(params)
+    p["table"] = PROJTASKS
     return sp(opid, p, after)
 
 def forms_trigger(form):
@@ -2348,6 +2361,15 @@ FLOW_DESCRIPTIONS = {
     "HD23 Monthly report": "Runs the 1st of each month at 9am: emails Martin and Joseph a cumulative rollup "
         "of the month that just ended (opened/closed counts, avg hours to close, tickets closed by "
         "technician, tickets opened by category) and archives a PDF copy to /Reports.",
+    "HD24 Project task created": "Runs once on every new Project Tasks item: emails/Teams-messages the task's "
+        "Assigned To person (what the task is, when it's due) and every project Owner plus the project's "
+        "creator (who it's assigned to), then recomputes and patches the parent project's Task Progress rollup.",
+    "HD25 Project task updated": "Runs on a task's status/assignment change: a reassignment notifies the new "
+        "assignee, completion notifies the assignee plus the project's Owner(s)/creator, and either way "
+        "restamps the rollup and the LastNotified* fields.",
+    "HD26 Project task overdue check": "Runs daily at 9:15am: nudges the task's assignee and the parent "
+        "project's Owner(s)/creator (email + Teams) on any not-Completed task that's past its Due Date, or has "
+        "no Due Date and hasn't been touched in 5+ days - repeating every day until resolved.",
 }
 
 def hd16():
@@ -3089,6 +3111,276 @@ def hd23():
         "schedule": {"monthDays": [1], "hours": ["9"], "minutes": [0]}}}
     return "HD23 Monthly report", {"Recurrence": monthly_trig}, actions
 
+# ---------- HD24 Project task created ----------
+def hd24():
+    """Fires when a sub-task is added to the Project Tasks list (sub-tasks within an IT Project - a plain
+    SharePoint list, not Planner: Martin compared both and chose this for simpler rollup math and no
+    bucket-per-project management overhead). Looks up the parent project (via ProjectID, a GetItem) for its
+    Owner(s) and creator, then emails + Teams-messages: the task's Assigned To person (what the task is, when
+    it's due), and every project Owner plus the project's creator (who it's assigned to) - same "both the
+    assignee and the project's own people" shape hd19()/hd20() use for Owner/ProjectSponsor on the project
+    itself. Recomputes the parent project's Task Progress rollup ("X of Y tasks complete") across every task on
+    that project and patches it onto the IT Projects item - the project's own page shows only this rollup, never
+    the full task list (Martin's call: progress visibility without an embedded list to maintain; the assignee
+    still needs to stay on track day to day, which is what HD26's daily nudge is for, not a bigger one-time
+    ping here). Stamps LastNotifiedStatus/LastNotifiedAssignee on the new task so HD25 has a clean baseline to
+    compare against on the next edit."""
+    pt = lambda k: f"triggerOutputs()?['body/{k}']"
+    ID = pt('ID')
+    PID = pt('ProjectID')
+    AsEmail = f"toLower(coalesce({pt('Assigned_x0020_To/Email')},''))"
+    AsName = f"coalesce({pt('Assigned_x0020_To/DisplayName')},'Unassigned')"
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+    due_line = (f"@{{if(empty(coalesce({pt('Due_x0020_Date')},'')),'',"
+                f"concat(' (due ',formatDateTime({pt('Due_x0020_Date')},'MMMM d, yyyy'),')'))}}")
+    actions = seq([
+        ("AssigneeEmail", compose(f"@{AsEmail}")),
+        ("Get_project", {**spp("GetItem", {"id": f"@{PID}"}), "runAfter": ra("AssigneeEmail")}),
+        ("Owner_names_select", {**people_select("Owner_names_select", "body('Get_project')?['Owner']", "DisplayName")["Owner_names_select"], "runAfter": ra("Get_project")}),
+        ("Owner_emails_select", {**people_select("Owner_emails_select", "body('Get_project')?['Owner']", "Email")["Owner_emails_select"], "runAfter": ra("Owner_names_select")}),
+        ("OwnerNames", {**compose(f"@{join_names('Owner_names_select', 'Not yet assigned')}"), "runAfter": ra("Owner_emails_select")}),
+        ("OwnerEmails", {**compose(f"@{join_emails('Owner_emails_select')}"), "runAfter": ra("OwnerNames")}),
+        ("CreatorEmail", {**compose("@toLower(coalesce(body('Get_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails")}),
+        ("ProjectTitle", {**compose("@coalesce(body('Get_project')?['Title'],'')"), "runAfter": ra("CreatorEmail")}),
+        ("Email_assignee", {**mail("@outputs('AssigneeEmail')",
+            f"[PRJ-@{{{PID}}}] New task: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>You've been assigned a task on project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
+            f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}</p>"
+            f"<p>@{{coalesce({pt('Notes')},'')}}</p>"
+            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            "runAfter": ra("ProjectTitle")}),
+        ("Tell_assignee", {**cond(tell_cond("AssigneeEmail"),
+            {"Assignee_new_task": scope_msg("Assignee_new_task_msg", "@outputs('AssigneeEmail')",
+                f"<p><b>New task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p>{due_line}")}),
+            "runAfter": ra("Email_assignee", status=("Succeeded", "Failed"))}),
+        ("Recipients", {**compose(
+            "@join(union(if(empty(outputs('CreatorEmail')),json('[]'),createArray(outputs('CreatorEmail'))),"
+            "union(createArray('" + ME + "'),split(outputs('OwnerEmails'),';'))),';')"),
+            "runAfter": ra("Tell_assignee", status=("Succeeded", "Failed"))}),
+        ("Email_owners", {**mail("@outputs('Recipients')",
+            f"[PRJ-@{{{PID}}}] Task assigned: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>A new task was added to project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
+            f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}<br><b>ASSIGNED TO:</b> @{{{AsName}}}</p>"
+            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            "runAfter": ra("Recipients")}),
+        ("Martin_new_task", {**scope_msg("Martin_new_task_msg", ME,
+            f"<p><b>New task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>Assigned to: @{{{AsName}}}</p>"),
+            "runAfter": ra("Email_owners", status=("Succeeded", "Failed"))}),
+        ("Tell_creator", {**cond(tell_cond("CreatorEmail"),
+            {"Creator_new_task": scope_msg("Creator_new_task_msg", "@outputs('CreatorEmail')",
+                f"<p><b>New task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>Assigned to: @{{{AsName}}}</p>")}),
+            "runAfter": ra("Martin_new_task", status=("Succeeded", "Failed"))}),
+        ("Tell_owners", {**notify_each("Tell_owners", "outputs('OwnerEmails')",
+            f"<p><b>New task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>Assigned to: @{{{AsName}}}</p>",
+            exclude=["outputs('CreatorEmail')"])["Tell_owners"],
+            "runAfter": ra("Tell_creator", status=("Succeeded", "Failed"))}),
+        ("Get_project_tasks", {**spt("GetItems", {"$filter": f"ProjectID eq @{{{PID}}}", "$top": 2000, "$select": "Id,Status"}),
+            "runAfter": ra("Tell_owners", status=("Succeeded", "Failed"))}),
+        ("Completed_tasks", {"type": "Query", "runAfter": ra("Get_project_tasks"),
+            "inputs": {"from": "@body('Get_project_tasks')?['value']", "where": "@equals(item()?['Status']?['Value'],'Completed')"}}),
+        ("ProgressText", {**compose(
+            "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
+            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
+            "runAfter": ra("Completed_tasks")}),
+        ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Task_x0020_Progress": "@outputs('ProgressText')"}),
+            "runAfter": ra("ProgressText")}),
+        ("Update_task", {**spt("PatchItem", {
+            "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
+            "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
+            "item/LastNotifiedAssignee": f"@{AsEmail}"}),
+            "runAfter": ra("Update_project_progress", status=("Succeeded", "Failed"))}),
+    ])
+    actions.update(self_check("Health", ["Tell_assignee", "Tell_creator", "Tell_owners"],
+        f"[Help desk health] HD24 problem on a new task",
+        f"Task <b>@{{{pt('Title')}}}</b> was added to PRJ-@{{{PID}}}, but these steps did not complete:",
+        f"concat('PRJ-',{PID},' task (created)')",
+        leaf=("Get_project", "Email_assignee", "Email_owners", "Martin_new_task", "Get_project_tasks",
+              "Update_project_progress"),
+        after=ra("Update_task", status=("Succeeded", "Failed", "Skipped")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
+    return "HD24 Project task created", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJTASKS)}, actions
+
+# ---------- HD25 Project task updated ----------
+def hd25():
+    """Fires on every create/edit of a Project Tasks item. Compares the current Status and Assigned To against
+    what was notified last time (LastNotifiedStatus/LastNotifiedAssignee - stamped by HD24 on creation and by
+    this flow at the end of every run) to find what's actually new; a plain re-trigger off its own Update_task
+    write at the end finds nothing changed and exits quietly via the trigger-level `conditions` below - the
+    exact same self-retrigger-forever shape HD20 documents and fixes for IT Projects itself (see its docstring
+    and the CLAUDE.md note it's built from), reproduced here because Update_task's own PatchItem bumps Modified
+    on every run the same way.
+    Looks up the parent project once (via ProjectID) for its Owner(s)/creator. A reassignment (a new Assigned To,
+    not simultaneously being marked Completed) notifies the new assignee the same way HD24 does on creation -
+    they need the heads-up even though the task itself isn't new. Moving Status to Completed notifies the
+    assignee (confirmation) and every project Owner + the creator (who finished it, so they know); any other
+    status change (e.g. back to In Progress) doesn't get its own notification - only completion and reassignment
+    are noteworthy enough to interrupt anyone, and HD26's daily sweep already keeps an unfinished task visible.
+    Recomputes and patches the parent project's Task Progress rollup whenever Status changed (a reassignment
+    alone doesn't move the count). Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way."""
+    pt = lambda k: f"triggerOutputs()?['body/{k}']"
+    ID = pt('ID')
+    PID = pt('ProjectID')
+    V = pt('Status/Value')
+    AsEmail = f"toLower(coalesce({pt('Assigned_x0020_To/Email')},''))"
+    AsName = f"coalesce({pt('Assigned_x0020_To/DisplayName')},'Unassigned')"
+    status_changed = f"not(equals({V},coalesce({pt('LastNotifiedStatus')},'')))"
+    assignee_changed = f"not(equals({AsEmail},coalesce({pt('LastNotifiedAssignee')},'')))"
+    completed_now = f"equals({V},'Completed')"
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+
+    reassign_branch = seq([
+        ("AssigneeEmail_ra", compose(f"@{AsEmail}")),
+        ("Email_new_assignee", {**mail("@outputs('AssigneeEmail_ra')",
+            f"[PRJ-@{{{PID}}}] Task reassigned to you: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>You've been assigned a task on project PRJ-@{{{PID}}}.</p>"
+            f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
+            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            "runAfter": ra("AssigneeEmail_ra")}),
+        ("Tell_new_assignee", {**cond(tell_cond("AssigneeEmail_ra"),
+            {"New_assignee_msg": scope_msg("New_assignee_msg_s", "@outputs('AssigneeEmail_ra')",
+                f"<p><b>You've been assigned a task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p>")}),
+            "runAfter": ra("Email_new_assignee", status=("Succeeded", "Failed"))}),
+    ])
+
+    completion_branch = seq([
+        ("AssigneeEmail_co", compose(f"@{AsEmail}")),
+        ("Email_assignee_done", {**mail("@outputs('AssigneeEmail_co')",
+            f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p></div>"),
+            "runAfter": ra("AssigneeEmail_co")}),
+        ("Tell_assignee_done", {**cond(tell_cond("AssigneeEmail_co"),
+            {"Assignee_done_msg": scope_msg("Assignee_done_msg_s", "@outputs('AssigneeEmail_co')",
+                f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p>")}),
+            "runAfter": ra("Email_assignee_done", status=("Succeeded", "Failed"))}),
+        ("Owner_names_select_co", {**people_select("Owner_names_select_co", "body('Get_project')?['Owner']", "DisplayName")["Owner_names_select_co"], "runAfter": ra("Tell_assignee_done", status=("Succeeded", "Failed"))}),
+        ("Owner_emails_select_co", {**people_select("Owner_emails_select_co", "body('Get_project')?['Owner']", "Email")["Owner_emails_select_co"], "runAfter": ra("Owner_names_select_co")}),
+        ("OwnerEmails_co", {**compose(f"@{join_emails('Owner_emails_select_co')}"), "runAfter": ra("Owner_emails_select_co")}),
+        ("CreatorEmail_co", {**compose("@toLower(coalesce(body('Get_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails_co")}),
+        ("Recipients_co", {**compose(
+            "@join(union(if(empty(outputs('CreatorEmail_co')),json('[]'),createArray(outputs('CreatorEmail_co'))),"
+            "union(createArray('" + ME + "'),split(outputs('OwnerEmails_co'),';'))),';')"),
+            "runAfter": ra("CreatorEmail_co")}),
+        ("Email_owners_done", {**mail("@outputs('Recipients_co')",
+            f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            f"<p>@{{{AsName}}} completed a task on project PRJ-@{{{PID}}}: @{{coalesce(body('Get_project')?['Title'],'')}}</p>"
+            f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
+            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            "runAfter": ra("Recipients_co")}),
+        ("Martin_task_done", {**scope_msg("Martin_task_done_msg", ME,
+            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>"),
+            "runAfter": ra("Email_owners_done", status=("Succeeded", "Failed"))}),
+        ("Tell_creator_done", {**cond(tell_cond("CreatorEmail_co"),
+            {"Creator_task_done": scope_msg("Creator_task_done_msg", "@outputs('CreatorEmail_co')",
+                f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>")}),
+            "runAfter": ra("Martin_task_done", status=("Succeeded", "Failed"))}),
+        ("Tell_owners_done", {**notify_each("Tell_owners_done", "outputs('OwnerEmails_co')",
+            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>",
+            exclude=["outputs('CreatorEmail_co')"])["Tell_owners_done"],
+            "runAfter": ra("Tell_creator_done", status=("Succeeded", "Failed"))}),
+    ])
+
+    actions = seq([
+        ("Get_project", spp("GetItem", {"id": f"@{PID}"})),
+        ("Reassigned_change", {**cond(f"@and({assignee_changed},not({completed_now}))", reassign_branch), "runAfter": ra("Get_project")}),
+        ("Completed_change", {**cond(f"@and({status_changed},{completed_now})", completion_branch),
+            "runAfter": ra("Reassigned_change", status=("Succeeded", "Failed", "Skipped"))}),
+        ("Get_project_tasks", {**spt("GetItems", {"$filter": f"ProjectID eq @{{{PID}}}", "$top": 2000, "$select": "Id,Status"}),
+            "runAfter": ra("Completed_change", status=("Succeeded", "Failed", "Skipped"))}),
+        ("Completed_tasks", {"type": "Query", "runAfter": ra("Get_project_tasks"),
+            "inputs": {"from": "@body('Get_project_tasks')?['value']", "where": "@equals(item()?['Status']?['Value'],'Completed')"}}),
+        ("ProgressText", {**compose(
+            "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
+            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
+            "runAfter": ra("Completed_tasks")}),
+        ("Update_project_progress", {**cond(f"@{status_changed}",
+            {"Patch_progress": spp("PatchItem", {"id": f"@{PID}", "item/Task_x0020_Progress": "@outputs('ProgressText')"})}),
+            "runAfter": ra("ProgressText")}),
+        ("Update_task", {**spt("PatchItem", {
+            "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
+            "item/LastNotifiedStatus": f"@{V}", "item/LastNotifiedAssignee": f"@{AsEmail}"}),
+            "runAfter": ra("Update_project_progress", status=("Succeeded", "Failed", "Skipped"))}),
+    ])
+    actions.update(self_check("Health", ["Reassigned_change", "Completed_change"],
+        f"[Help desk health] HD25 problem on task update",
+        f"Task <b>@{{{pt('Title')}}}</b> on PRJ-@{{{PID}}} was updated, but these steps did not complete:",
+        f"concat('PRJ-',{PID},' task (updated)')",
+        leaf=("Email_new_assignee", "Email_assignee_done", "Email_owners_done", "Martin_task_done",
+              "Get_project_tasks"),
+        after=ra("Update_task", status=("Succeeded", "Failed", "Skipped")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
+    trig = sp_trigger("GetOnUpdatedItems", PROJTASKS)
+    trig["conditions"] = [{"expression": f"@or({status_changed},{assignee_changed})"}]
+    return "HD25 Project task updated", {"When_an_item_is_created_or_modified": trig}, actions
+
+# ---------- HD26 Project task overdue check ----------
+def hd26():
+    """Runs every day at 9:15am (15 minutes after HD21's own 9am sweep, so the two daily SharePoint-list scans
+    don't land in the same second). Every Project Tasks item that isn't Completed and is either past its Due
+    Date, or has no Due Date set and hasn't been touched (Modified) in 5+ days - the same no-due-date fallback
+    HD21 uses for whole projects - gets one email + Teams message to BOTH its Assigned To person AND the parent
+    project's Owner(s)/creator (looked up per task via a nested GetItem on ProjectID, since each loop iteration
+    here is a task, not a project - unlike HD21's single-list sweep). Deliberately has no LastNotified stamp and
+    no change-detection, same rationale as HD21: the filter and the daily cadence are both unconditional, so an
+    overdue task gets re-nudged on every subsequent daily run too, not just once - it only stops once the task is
+    completed or its Due Date/Modified date moves it out of the filter. No self-check: like HD21/HD23, it's a
+    scheduled sweep, not a per-item flow."""
+    it = lambda k: f"items('Apply_to_each')?['{k}']"
+    ID = it('ID')
+    PID = it('ProjectID')
+    tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
+                              + "')),") + is_internal("outputs('" + who + "')") + ")"
+    due_line_ov = (f"@{{if(empty(coalesce({it('Due_x0020_Date')},'')),'no due date set',"
+                   f"concat('due ',formatDateTime({it('Due_x0020_Date')},'MMMM d, yyyy')))}}")
+    overdue_body = (f"<p>PRJ-@{{{PID}}} task @{{{it('Title')}}} ({due_line_ov}) hasn't been completed"
+                    f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
+                    f"<p>Assigned to: @{{coalesce({it('Assigned_x0020_To')}?['DisplayName'],'Unassigned')}}</p>"
+                    f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>")
+    loop_actions = seq([
+        ("AssigneeEmail", compose(f"@toLower(coalesce({it('Assigned_x0020_To')}?['Email'],''))")),
+        ("Get_task_project", {**spp("GetItem", {"id": f"@{PID}"}), "runAfter": ra("AssigneeEmail")}),
+        ("Owner_emails_select_t", {**people_select("Owner_emails_select_t", "body('Get_task_project')?['Owner']", "Email")["Owner_emails_select_t"], "runAfter": ra("Get_task_project")}),
+        ("OwnerEmails_t", {**compose(f"@{join_emails('Owner_emails_select_t')}"), "runAfter": ra("Owner_emails_select_t")}),
+        ("CreatorEmail_t", {**compose("@toLower(coalesce(body('Get_task_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails_t")}),
+        ("Recipients_t", {**compose(
+            "@join(union(if(empty(outputs('CreatorEmail_t')),json('[]'),createArray(outputs('CreatorEmail_t'))),"
+            "union(if(empty(outputs('AssigneeEmail')),json('[]'),createArray(outputs('AssigneeEmail'))),"
+            "union(createArray('" + ME + "'),split(outputs('OwnerEmails_t'),';')))),';')"),
+            "runAfter": ra("CreatorEmail_t")}),
+        ("Email_overdue", {**mail("@outputs('Recipients_t')",
+            f"[PRJ-@{{{PID}}}] Task overdue: @{{{it('Title')}}}", overdue_body),
+            "runAfter": ra("Recipients_t")}),
+        ("Martin_overdue", {**scope_msg("Martin_overdue_msg", ME, overdue_body),
+            "runAfter": ra("Email_overdue", status=("Succeeded", "Failed"))}),
+        ("Tell_assignee_overdue", {**cond(tell_cond("AssigneeEmail"),
+            {"Assignee_overdue": scope_msg("Assignee_overdue_msg", "@outputs('AssigneeEmail')", overdue_body)}),
+            "runAfter": ra("Martin_overdue", status=("Succeeded", "Failed"))}),
+        ("Tell_creator_overdue", {**cond(tell_cond("CreatorEmail_t"),
+            {"Creator_overdue": scope_msg("Creator_overdue_msg", "@outputs('CreatorEmail_t')", overdue_body)}),
+            "runAfter": ra("Tell_assignee_overdue", status=("Succeeded", "Failed"))}),
+        ("Tell_owners_overdue", {**notify_each("Tell_owners_overdue", "outputs('OwnerEmails_t')", overdue_body,
+            exclude=["outputs('CreatorEmail_t')", "outputs('AssigneeEmail')"])["Tell_owners_overdue"],
+            "runAfter": ra("Tell_creator_overdue", status=("Succeeded", "Failed"))}),
+    ])
+    loop = {"type": "Foreach", "foreach": "@body('Get_overdue_tasks')?['value']", "actions": loop_actions}
+    due_filter = ("Status ne 'Completed' and ("
+                  "(Due_x0020_Date ne null and Due_x0020_Date lt '@{utcNow()}') or "
+                  "(Due_x0020_Date eq null and Modified lt '@{addDays(utcNow(),-5)}'))")
+    actions = seq([
+        ("Get_overdue_tasks", spt("GetItems", {"$filter": due_filter, "$top": 500})),
+        ("Apply_to_each", loop),
+    ])
+    daily_trig = {"type": "Recurrence", "recurrence": {
+        "frequency": "Day", "interval": 1, "timeZone": TZ,
+        "schedule": {"hours": ["9"], "minutes": [15]}}}
+    return "HD26 Project task overdue check", {"Recurrence": daily_trig}, actions
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -3148,7 +3440,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
