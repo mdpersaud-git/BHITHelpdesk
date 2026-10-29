@@ -2361,10 +2361,10 @@ FLOW_DESCRIPTIONS = {
     "HD23 Monthly report": "Runs the 1st of each month at 9am: emails Martin and Joseph a cumulative rollup "
         "of the month that just ended (opened/closed counts, avg hours to close, tickets closed by "
         "technician, tickets opened by category) and archives a PDF copy to /Reports.",
-    "HD24 Project task created": "Runs once on every new Project Tasks item: emails/Teams-messages the task's "
+    "HD24 Project task created v2": "Runs once on every new Project Tasks item: emails/Teams-messages the task's "
         "Assigned To person (what the task is, when it's due) and every project Owner plus the project's "
         "creator (who it's assigned to), then recomputes and patches the parent project's Task Progress rollup.",
-    "HD25 Project task updated": "Runs on a task's status/assignment change: a reassignment notifies the new "
+    "HD25 Project task updated v2": "Runs on a task's status/assignment change: a reassignment notifies the new "
         "assignee, completion notifies the assignee plus the project's Owner(s)/creator, and either way "
         "restamps the rollup and the LastNotified* fields.",
     "HD26 Project task overdue check": "Runs daily at 9:15am: nudges the task's assignee and the parent "
@@ -3201,7 +3201,7 @@ def hd24():
               "Update_project_progress"),
         after=ra("Update_task", status=("Succeeded", "Failed", "Skipped")),
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
-    return "HD24 Project task created", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJTASKS)}, actions
+    return "HD24 Project task created v2", {"When_an_item_is_created": sp_trigger("GetOnNewItems", PROJTASKS)}, actions
 
 # ---------- HD25 Project task updated ----------
 def hd25():
@@ -3317,7 +3317,7 @@ def hd25():
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     trig = sp_trigger("GetOnUpdatedItems", PROJTASKS)
     trig["conditions"] = [{"expression": f"@or({status_changed},{assignee_changed})"}]
-    return "HD25 Project task updated", {"When_an_item_is_created_or_modified": trig}, actions
+    return "HD25 Project task updated v2", {"When_an_item_is_created_or_modified": trig}, actions
 
 # ---------- HD26 Project task overdue check ----------
 def hd26():
