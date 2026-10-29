@@ -1550,7 +1550,7 @@ def hd8():
         "Overdue = open more than one business day. Business hours run 7:00 AM to 9:00 PM daily. Sent automatically by IT Support [Branthaven].")
     actions = seq([
         ("DayStart", compose(
-            f"@convertTimeZone(addHours(addDays(startOfDay(convertTimeZone(utcNow(),'UTC','{TZ}')),-1),21),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
+            f"@convertTimeZone(addHours(addDays(startOfDay(convertTimeZone(utcNow(),'UTC','{TZ}')),-1),9),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
         ("Opened", sp("GetItems", {"$filter": "Created ge '@{outputs('DayStart')}'", "$top": 5000})),
         ("ResolvedToday", sp("GetItems", {"$filter": "ResolvedOn ge '@{outputs('DayStart')}' or (ClosedOn ge '@{outputs('DayStart')}' and ResolvedOn eq null)", "$top": 5000})),
         ("OpenNow", sp("GetItems", {"$filter": f"Status ne '{S_CLOSED}' and Status ne '{S_RES}'", "$top": 5000})),
@@ -1623,7 +1623,7 @@ def hd8():
     actions["Table_by_category"]["inputs"] = {"from": "@variables('varByCategory')", "select": rpt_rowx(
         rpt_td("coalesce(item()?['Category'],'Uncategorized')", "font-weight:700;"),
         rpt_td(rpt_bar("#0d9488", "#ccfbf1")), rpt_td("string(item()?['Tickets'])", "font-weight:700;"))}
-    return "HD8 Daily report", {"Recurrence": recurrence([21], ALLDAYS)}, actions
+    return "HD8 Daily report", {"Recurrence": recurrence([9], ALLDAYS)}, actions
 
 # ---------- HD9 Card actions ----------
 def hd9():
@@ -2310,7 +2310,7 @@ FLOW_DESCRIPTIONS = {
         "gets a Teams+email ping on both of those.",
     "HD7 My open tickets": "\"My open tickets\" self-service Microsoft Forms lookup: a tech requests their own "
         "open/assigned tickets back.",
-    "HD8 Daily report": "Runs once at 9pm: emails Martin and Joseph a report of tickets open longer than a "
+    "HD8 Daily report": "Runs once at 9am: emails Martin and Joseph a report of tickets open longer than a "
         "business day and tickets unassigned for 4+ hours, archives a PDF copy to /Reports, and recycles any "
         "archived daily report older than 30 days.",
     "HD9 Card actions": "Handles button clicks on the Teams adaptive card HD3/HD4 post (assign to me, change "
@@ -2345,7 +2345,7 @@ FLOW_DESCRIPTIONS = {
         "project untouched for 5+ days, repeating every day until the project is actually updated.",
     "HD22 Fix project permissions (run once)": "One-off, HD17's twin for IT Projects: sets per-item permissions "
         "(owners full control, Talal/Joseph Contribute, sponsor Read) on every existing project.",
-    "HD23 Monthly report": "Runs the 1st of each month at 9pm: emails Martin and Joseph a cumulative rollup "
+    "HD23 Monthly report": "Runs the 1st of each month at 9am: emails Martin and Joseph a cumulative rollup "
         "of the month that just ended (opened/closed counts, avg hours to close, tickets closed by "
         "technician, tickets opened by category) and archives a PDF copy to /Reports.",
 }
@@ -3005,7 +3005,7 @@ def hd22():
 
 # ---------- HD23 Monthly report ----------
 def hd23():
-    """Runs the 1st of each month at 9pm: a cumulative rollup of the month that just ended (opened/closed
+    """Runs the 1st of each month at 9am: a cumulative rollup of the month that just ended (opened/closed
     counts, avg hours to close, tickets closed by technician, tickets opened by category) emailed to Martin
     and Joseph like HD8, and archived as a PDF in /Reports named "IT Support Monthly Report - <Month Year>.pdf"
     - a distinct prefix from HD8's "IT Support Help Desk Report - " daily archives, so HD8's 30-day daily
@@ -3086,7 +3086,7 @@ def hd23():
     ])
     monthly_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Month", "interval": 1, "timeZone": TZ,
-        "schedule": {"monthDays": [1], "hours": ["21"], "minutes": [0]}}}
+        "schedule": {"monthDays": [1], "hours": ["9"], "minutes": [0]}}}
     return "HD23 Monthly report", {"Recurrence": monthly_trig}, actions
 
 def write_package(flows, zip_path, pkg_name):
