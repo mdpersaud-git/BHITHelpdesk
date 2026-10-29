@@ -3185,7 +3185,8 @@ def hd24():
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
             "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
             "runAfter": ra("Completed_tasks")}),
-        ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Task_x0020_Progress": "@outputs('ProgressText')"}),
+        ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Title": "@outputs('ProjectTitle')",
+            "item/Task_x0020_Progress": "@outputs('ProgressText')"}),
             "runAfter": ra("ProgressText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
@@ -3300,7 +3301,9 @@ def hd25():
             "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
             "runAfter": ra("Completed_tasks")}),
         ("Update_project_progress", {**cond(f"@{status_changed}",
-            {"Patch_progress": spp("PatchItem", {"id": f"@{PID}", "item/Task_x0020_Progress": "@outputs('ProgressText')"})}),
+            {"Patch_progress": spp("PatchItem", {"id": f"@{PID}",
+                "item/Title": "@coalesce(body('Get_project')?['Title'],'')",
+                "item/Task_x0020_Progress": "@outputs('ProgressText')"})}),
             "runAfter": ra("ProgressText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
