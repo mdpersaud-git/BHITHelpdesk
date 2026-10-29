@@ -2,6 +2,9 @@ import json, uuid, os, zipfile, shutil, copy
 
 OUT = os.path.join(os.path.dirname(__file__), 'out')
 SITE = "https://branthavenhomes.sharepoint.com/sites/ITHelpDeskv2"
+SITE_PATH = "/sites/ITHelpDeskv2"   # server-relative part of SITE - for raw REST calls that need a full
+                                     # server-relative URL (e.g. _api/web/GetFolderByServerRelativeUrl), not
+                                     # just a path under the "dataset"-scoped web context
 ENV = "Default-26e851a0-5d3b-4687-80a3-7d758c6fc2b2"   # Power Automate environment (for links in alerts)
 TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 PROJECTS = "3de1b401-4cac-4994-9c43-0d7cdd464b47"   # "IT Projects" list, added 2026-10-25
@@ -1415,26 +1418,75 @@ def hd7():
     ])
     return "HD7 My open tickets", {"When_a_new_response_is_submitted": forms_trigger(FORM2)}, actions
 
+# ---------- Email report design kit (shared by HD8 daily + HD23 monthly) ----------
+# "Clean Slate" styling, chosen 2026-10-29: rounded-corner bordered cards/tiles, colored status pills instead
+# of plain colored text, a light indigo/teal accent pairing - all plain inline-styled <table> markup (no
+# flexbox/grid/gradients/custom fonts), since that's what Outlook desktop's Word rendering engine supports.
+# border-radius degrades gracefully there (square corners, nothing breaks), so it's used anyway for every
+# other client (Outlook.com, new Outlook, mobile Mail, Apple Mail) where it does render.
+RPT_BORDER = "#e5e7eb"
+RPT_TEXT = "#15181f"
+
+def rpt_esc(x):
+    return f"replace(replace(replace({x},'&','&amp;'),'<','&lt;'),'>','&gt;')"
+
+def rpt_tile(label, value_expr, number_color="#15181f", bg="#ffffff", border=RPT_BORDER, label_color="#6b7280"):
+    return ("<td width=\"33%\" style=\"padding:4px\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
+            "style=\"background:" + bg + ";border:1px solid " + border + ";border-radius:10px\">"
+            "<tr><td style=\"padding:12px 14px\"><div style=\"font-size:24px;font-weight:800;color:" + number_color + ";line-height:28px\">" + value_expr + "</div>"
+            "<div style=\"font-size:11px;color:" + label_color + ";margin-top:2px\">" + label + "</div></td></tr></table></td>")
+
+def rpt_card(title, dot_color, pill_bg, pill_color, pill_expr, body_expr):
+    pill = (("<span style=\"float:right;font-size:11px;font-weight:700;background:" + pill_bg + ";color:" + pill_color +
+             ";padding:3px 9px;border-radius:999px\">" + pill_expr + "</span>") if pill_expr else "")
+    return ("<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:14px;border:1px solid " + RPT_BORDER + ";border-radius:10px;border-collapse:separate;page-break-inside:avoid;break-inside:avoid\">"
+            "<tr style=\"page-break-after:avoid\"><td style=\"padding:10px 14px;border-bottom:1px solid " + RPT_BORDER + "\">"
+            "<span style=\"display:inline-block;width:7px;height:7px;border-radius:50%;background:" + dot_color + ";margin-right:8px\"></span>"
+            "<span style=\"font-size:14px;font-weight:700;color:" + RPT_TEXT + "\">" + title + "</span>" + pill + "</td></tr>"
+            "<tr><td style=\"background:#ffffff;padding:0\">" + body_expr + "</td></tr></table>")
+
+def rpt_th(t, w=""):
+    return f"<td{w} style=\"padding:7px 14px;background:#f8fafc;font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.02em\">{t}</td>"
+
+def rpt_td(expr, extra=""):
+    return f"'<td style=\"padding:8px 14px;border-top:1px solid #f1f1f1;font-size:13px;color:{RPT_TEXT};{extra}\">',{expr},'</td>'"
+
+def rpt_rowx(*cells):
+    return "@concat('<tr>'," + ",".join(cells) + ",'</tr>')"
+
+def rpt_listbody(filt, headers, tbl, empty):
+    return ("@{if(equals(length(body('" + filt + "')),0),'<div style=\"padding:12px 14px;font-size:13px;color:#94a3b8\">" + empty + "</div>',"
+            "concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + headers + "</tr>',outputs('" + tbl + "'),'</table>'))}")
+
+def rpt_bar(fill_color, track_color):
+    return ("concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td style=\"background:" + track_color + ";border-radius:6px\">"
+            "<table width=\"',string(max(createArray(int(item()?['Pct']),3))),'%\" cellpadding=\"0\" cellspacing=\"0\"><tr>"
+            "<td style=\"height:8px;line-height:8px;font-size:1px;background:" + fill_color + ";border-radius:6px\">&nbsp;</td></tr></table>"
+            "</td></tr></table>')")
+
+def rpt_wrap(header_sub_expr, date_expr, body_rows, footer_note):
+    return ("<html><body style=\"margin:0;padding:0;background:#eef2f7;font-family:Arial,sans-serif\">"
+            "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#eef2f7\"><tr><td align=\"center\" style=\"padding:16px\">"
+            "<table width=\"680\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:680px;max-width:100%\">"
+            "<tr><td style=\"background:#ffffff;padding:18px 22px;border-bottom:1px solid " + RPT_BORDER + "\">"
+            "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>"
+            "<td style=\"font-size:19px;font-weight:800;color:" + RPT_TEXT + "\">IT Support <span style=\"color:#9aa1ad;font-weight:600\">&middot; Branthaven</span></td>"
+            "<td align=\"right\" style=\"font-size:12px;color:#6b7280\">" + date_expr + "</td></tr></table>"
+            "<div style=\"font-size:12px;color:#6b7280;margin-top:3px\">" + header_sub_expr + "</div>"
+            "</td></tr>"
+            + body_rows +
+            "<tr><td style=\"padding:16px 22px 22px;font-size:11px;color:#9aa1ad\">" + footer_note + "</td></tr>"
+            "</table></td></tr></table></body></html>")
+
 # ---------- HD8 Daily report ----------
 def hd8():
-    tbl = lambda name: f"@{{body('{name}')}}"
     def section(prefix, where, select):
         return [
             (f"Filter_{prefix}", {"type": "Query", "inputs": {"from": "@body('OpenNow')?['value']", "where": where}}),
             (f"Select_{prefix}", {"type": "Select", "inputs": {"from": f"@body('Filter_{prefix}')", "select": select}}),
             (f"Table_{prefix}", {"type": "Table", "inputs": {"from": f"@body('Select_{prefix}')", "format": "HTML"}}),
         ]
-    def or_none(prefix, msg):
-        return f"@{{if(equals(length(body('Filter_{prefix}')),0),'<p>{msg}</p>',body('Table_{prefix}'))}}"
     by_tech_loop = {"type": "Foreach", "foreach": "@outputs('Techs')", "actions": seq([
-        ("Filter_this_tech", {"type": "Query", "inputs": {"from": "@body('OpenNow')?['value']",
-            "where": "@equals(coalesce(item()?['AssignedTo']?['Email'],'Unassigned'),items('Apply_to_each_tech'))"}}),
-        ("Append_tech", {"type": "AppendToArrayVariable", "inputs": {"name": "varByTech", "value": {
-            "Technician": "@items('Apply_to_each_tech')", "Open": "@length(body('Filter_this_tech'))",
-            "Overdue": "@length(filter(body('Filter_this_tech'),'x'))"}}}),
-    ])}
-    # filter() isn't a workflow function; compute overdue with a second Query instead
-    by_tech_loop["actions"] = seq([
         ("Filter_this_tech", {"type": "Query", "inputs": {"from": "@body('OpenNow')?['value']",
             "where": "@equals(coalesce(item()?['AssignedTo']?['Email'],'Unassigned'),items('Apply_to_each_tech'))"}}),
         ("Filter_this_tech_overdue", {"type": "Query", "inputs": {"from": "@body('Filter_this_tech')",
@@ -1443,7 +1495,7 @@ def hd8():
             "Technician": "@items('Apply_to_each_tech')", "Open": "@length(body('Filter_this_tech'))",
             "Overdue": "@length(body('Filter_this_tech_overdue'))",
             "Pct": "@div(mul(length(body('Filter_this_tech')),100),max(length(body('OpenNow')?['value']),1))"}}}),
-    ])
+    ])}
     by_cat_loop = {"type": "Foreach", "foreach": "@outputs('Categories')", "actions": seq([
         ("Filter_this_category", {"type": "Query", "inputs": {"from": "@body('Opened')?['value']",
             "where": "@equals(item()?['Category']?['Value'],items('Apply_to_each_category'))"}}),
@@ -1452,61 +1504,50 @@ def hd8():
             "Pct": "@div(mul(length(body('Filter_this_category')),100),max(length(body('Opened')?['value']),1))"}}}),
     ])}
     fname = "IT Support Help Desk Report - @{" + nowET('MMMM d, yyyy') + "}"
-    ESC = lambda x: f"replace(replace(replace({x},'&','&amp;'),'<','&lt;'),'>','&gt;')"
     LASTTECH = ("if(and(empty(coalesce(item()?['AssignedTo']?['Email'],'')),equals(item()?['Status']?['Value'],'Open')),'',if(not(empty(coalesce(item()?['AssignedTo']?['Email'],''))),coalesce(item()?['AssignedTo']?['DisplayName'],item()?['AssignedTo']?['Email']),"
                 "if(not(empty(coalesce(item()?['LastNotifiedTech'],''))),item()?['LastNotifiedTech'],"
                 "if(and(not(empty(coalesce(item()?['Editor']?['Email'],''))),not(contains(toLower(coalesce(item()?['Editor']?['Email'],'')),'it_support'))),coalesce(item()?['Editor']?['DisplayName'],item()?['Editor']?['Email']),''))))")
     REQ = "if(empty(item()?['RequesterEmail']),coalesce(item()?['Author']?['DisplayName'],'Unknown'),item()?['RequesterEmail'])"
-    def td(expr, extra=""):
-        return f"'<td style=\"padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#0f172a;{extra}\">',{expr},'</td>'"
-    def rowx(*cells):
-        return "@concat('<tr>'," + ",".join(cells) + ",'</tr>')"
-    def th(t, w=""):
-        return f"<td{w} style=\"padding:7px 10px;background:#f1f5f9;font-size:11px;font-weight:bold;color:#475569;text-transform:uppercase\">{t}</td>"
-    def bar(color):
-        return ("concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"',string(max(createArray(int(item()?['Pct']),2))),'%\" bgcolor=\"" + color + "\" style=\"background:" + color + ";border-top:10px solid " + color + ";height:0;font-size:1px;line-height:1px\"></td><td style=\"font-size:1px\">&nbsp;</td></tr></table>')")
-    def card(title, accent, count_expr, body_expr):
-        return ("<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:16px;border:1px solid #e2e8f0;border-collapse:collapse;page-break-inside:avoid;break-inside:avoid\">"
-                "<tr style=\"page-break-after:avoid\"><td style=\"background:#f8fafc;color:" + accent + ";border-top:5px solid " + accent + ";padding:9px 12px;font-size:15px;font-weight:bold;page-break-after:avoid\">" + title + count_expr + "</td></tr>"
-                "<tr><td style=\"background:#ffffff;padding:0\">" + body_expr + "</td></tr></table>")
-    def listbody(filt, headers, tbl, empty):
-        return ("@{if(equals(length(body('" + filt + "')),0),'<div style=\"padding:12px;font-size:13px;color:#64748b\">" + empty + "</div>',"
-                "concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + headers + "</tr>',outputs('" + tbl + "'),'</table>'))}")
-    def tile(label, value_expr, color, bg="#f8fafc"):
-        return ("<td width=\"33%\" style=\"padding:4px\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:" + bg + ";border:1px solid #e2e8f0;border-top:4px solid " + color + "\">"
-                "<tr><td style=\"padding:12px 14px\"><div style=\"font-size:30px;font-weight:bold;color:#0f172a;line-height:34px\">" + value_expr + "</div>"
-                "<div style=\"font-size:12px;color:#64748b;text-transform:uppercase;margin-top:2px\">" + label + "</div></td></tr></table></td>")
     n_over = "@{length(body('Filter_overdue'))}"
     n_un = "@{length(body('Filter_unassigned'))}"
-    report = (
-        "<html><body style=\"margin:0;padding:0;background:#eef2f7;font-family:Arial,sans-serif\">"
-        "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#eef2f7\"><tr><td align=\"center\" style=\"padding:16px\">"
-        "<table width=\"680\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:680px;max-width:100%\">"
-        "<tr><td style=\"background:#ffffff;color:#0f2a4a;padding:18px 20px;border-top:6px solid #0f2a4a;border-bottom:1px solid #e2e8f0\">"
-        "<div style=\"font-size:20px;font-weight:bold\">IT Support [Branthaven]</div>"
-        "<div style=\"font-size:13px;color:#475569;margin-top:3px\">Daily report &middot; @{" + nowET('dddd MMMM d, yyyy') + "}</div></td></tr>"
+    overdue_zero = "equals(length(body('Filter_overdue')),0)"
+    unassigned_zero = "equals(length(body('Filter_unassigned')),0)"
+    tiles_row1 = (rpt_tile("Opened today", "@{length(body('Opened')?['value'])}")
+                + rpt_tile("Closed today", "@{length(body('ResolvedToday')?['value'])}")
+                + rpt_tile("Open now", "@{length(body('OpenNow')?['value'])}"))
+    tiles_row2 = (rpt_tile("Overdue", n_over,
+                    number_color="@{if(" + overdue_zero + ",'#15181f','#dc2626')}",
+                    bg="@{if(" + overdue_zero + ",'#ffffff','#fef2f2')}",
+                    border="@{if(" + overdue_zero + ",'#e5e7eb','#fecaca')}",
+                    label_color="@{if(" + overdue_zero + ",'#6b7280','#b91c1c')}")
+                + rpt_tile("Unassigned 4h+", n_un,
+                    number_color="@{if(" + unassigned_zero + ",'#15181f','#d97706')}",
+                    bg="@{if(" + unassigned_zero + ",'#ffffff','#fffbeb')}",
+                    border="@{if(" + unassigned_zero + ",'#e5e7eb','#fde68a')}",
+                    label_color="@{if(" + unassigned_zero + ",'#6b7280','#92400e')}")
+                + rpt_tile("Avg hours to close", "@{formatNumber(outputs('Average'),'0.0')}"))
+    body_rows = (
         "<tr><td style=\"padding:10px 0 0 0\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
-        "<tr>" + tile("Opened today", "@{length(body('Opened')?['value'])}", "#2563eb")
-               + tile("Closed today", "@{length(body('ResolvedToday')?['value'])}", "#16a34a")
-               + tile("Open now", "@{length(body('OpenNow')?['value'])}", "#0f2a4a") + "</tr>"
-        "<tr>" + tile("Overdue", n_over, "#dc2626", "@{if(equals(length(body('Filter_overdue')),0),'#f8fafc','#fef2f2')}")
-               + tile("Unassigned 4h+", n_un, "#f59e0b", "@{if(equals(length(body('Filter_unassigned')),0),'#f8fafc','#fffbeb')}")
-               + tile("Avg hours to close", "@{formatNumber(outputs('Average'),'0.0')}", "#7c3aed") + "</tr>"
+        "<tr>" + tiles_row1 + "</tr>"
+        "<tr>" + tiles_row2 + "</tr>"
         "</table></td></tr>"
         "<tr><td>"
-        + card("Overdue", "#dc2626", " (" + n_over + ")",
-               listbody("Filter_overdue", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Assigned / last touched by") + th("Days open", " width=\"60\""), "Table_overdue", "Nothing overdue"))
-        + card("Unassigned", "#d97706", " (" + n_un + ")",
-               listbody("Filter_unassigned", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Hours", " width=\"50\""), "Table_unassigned", "Nothing unassigned"))
-        + card("Waiting on users", "#7c3aed", " (@{length(body('Filter_waiting'))})",
-               listbody("Filter_waiting", th("Ticket", " width=\"60\"") + th("Requester") + th("Summary") + th("Status") + th("Assigned / last touched by") + th("Days waiting", " width=\"70\""), "Table_waiting", "Nobody is waiting"))
-        + card("Open IT Tickets", "#0f2a4a", "",
-               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + th("IT Support") + th("Workload", " width=\"220\"") + th("Open", " width=\"45\"") + th("Overdue", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
-        + card("Today's tickets by category", "#2563eb", "",
-               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + th("Category") + th("Share", " width=\"220\"") + th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
-        + "</td></tr>"
-        "<tr><td style=\"padding:14px 4px;font-size:11px;color:#94a3b8\">Overdue = open more than one business day. Business hours run 7:00 AM to 9:00 PM daily. Sent automatically by IT Support [Branthaven].</td></tr>"
-        "</table></td></tr></table></body></html>")
+        + rpt_card("Overdue", "#dc2626", "#fee2e2", "#b91c1c", n_over,
+               rpt_listbody("Filter_overdue", rpt_th("Ticket", " width=\"60\"") + rpt_th("Requester") + rpt_th("Summary") + rpt_th("Assigned / last touched by") + rpt_th("Days open", " width=\"60\""), "Table_overdue", "Nothing overdue"))
+        + rpt_card("Unassigned", "#d97706", "#fef3c7", "#92400e", n_un,
+               rpt_listbody("Filter_unassigned", rpt_th("Ticket", " width=\"60\"") + rpt_th("Requester") + rpt_th("Summary") + rpt_th("Hours", " width=\"50\""), "Table_unassigned", "Nothing unassigned"))
+        + rpt_card("Waiting on users", "#7c3aed", "#ede9fe", "#5b21b6", "@{length(body('Filter_waiting'))}",
+               rpt_listbody("Filter_waiting", rpt_th("Ticket", " width=\"60\"") + rpt_th("Requester") + rpt_th("Summary") + rpt_th("Status") + rpt_th("Assigned / last touched by") + rpt_th("Days waiting", " width=\"70\""), "Table_waiting", "Nobody is waiting"))
+        + rpt_card("Open IT tickets by technician", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('OpenNow')?['value'])}",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("IT Support") + rpt_th("Workload", " width=\"220\"") + rpt_th("Open", " width=\"45\"") + rpt_th("Overdue", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
+        + rpt_card("Today's tickets by category", "#0d9488", "#ccfbf1", "#0f766e", "@{length(body('Opened')?['value'])}",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("Category") + rpt_th("Share", " width=\"220\"") + rpt_th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
+        + "</td></tr>")
+    report = rpt_wrap(
+        "Daily report &middot; @{" + nowET('dddd MMMM d, yyyy') + "}",
+        "@{" + nowET('MMMM d, yyyy') + "}",
+        body_rows,
+        "Overdue = open more than one business day. Business hours run 7:00 AM to 9:00 PM daily. Sent automatically by IT Support [Branthaven].")
     actions = seq([
         ("DayStart", compose(
             f"@convertTimeZone(addHours(addDays(startOfDay(convertTimeZone(utcNow(),'UTC','{TZ}')),-1),21),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
@@ -1545,33 +1586,43 @@ def hd8():
          ("Convert_file", op("shared_onedriveforbusiness", "ConvertFile", {"id": "@body('Create_file_OneDrive')?['Id']", "type": "PDF"})),
          ("Create_file_Reports", op("shared_sharepointonline", "CreateFile", {
              "dataset": SITE, "folderPath": "/Reports", "name": fname + ".pdf", "body": "@body('Convert_file')"})),
-         ("Email_me_the_report", {**mail(ME, "IT Support Help Desk Report - @{" + nowET('MMMM d, yyyy') + "}", "@{outputs('ReportHtml')}",
-             attachments=[{"Name": fname + ".pdf", "ContentBytes": "@body('Convert_file')"}]),
+         ("Email_me_the_report", {**mail(f"{ME};{TECH2}", "IT Support Help Desk Report - @{" + nowET('MMMM d, yyyy') + "}", "@{outputs('ReportHtml')}"),
              "runAfter": ra("Create_file_Reports", status=("Succeeded", "Failed"))}),
+         # Archive cleanup: the body already carries everything the PDF attachment used to duplicate, so the
+         # PDF is kept only as a searchable /Reports archive, not re-attached to the email. Daily archives
+         # older than 30 days are recycled (not hard-deleted) here; the filename prefix match means HD23's
+         # monthly rollups ("IT Support Monthly Report - ...") are never touched by this cleanup.
+         ("List_reports_folder", {**sp_http("GET", f"_api/web/GetFolderByServerRelativeUrl('{SITE_PATH}/Reports')/Files?$select=Name,TimeCreated,ServerRelativeUrl"),
+             "runAfter": ra("Create_file_Reports", status=("Succeeded", "Failed"))}),
+         ("Filter_old_daily_reports", {"type": "Query", "inputs": {
+             "from": "@body('List_reports_folder')?['value']",
+             "where": "@and(startsWith(item()?['Name'],'IT Support Help Desk Report - '),less(ticks(item()?['TimeCreated']),ticks(addDays(utcNow(),-30))))"}}),
+         ("Delete_old_reports", {"type": "Foreach", "foreach": "@body('Filter_old_daily_reports')", "actions": {
+             "Recycle_old_report": sp_http("POST", "_api/web/GetFileByServerRelativeUrl('@{items('Delete_old_reports')?['ServerRelativeUrl']}')/recycle()")}}),
          ])
     def setsel(name, expr):
         actions[name]["inputs"]["select"] = expr
-    setsel("Select_overdue", rowx(
-        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
-        td(LASTTECH), td(f"div(int(coalesce(item()?['SLAHours'],0)),{DAY_H})", "font-weight:bold;color:#dc2626;")))
-    setsel("Select_unassigned", rowx(
-        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
-        td("string(item()?['SLAHours'])", "font-weight:bold;color:#d97706;")))
-    setsel("Select_waiting", rowx(
-        td("concat('IT-',item()?['ID'])", "font-weight:bold;"), td(ESC(REQ)), td(ESC("coalesce(item()?['Title'],'')")),
-        td("coalesce(item()?['Status']?['Value'],'')"), td(LASTTECH), td(f"div(int(coalesce(item()?['WaitingHours'],0)),{DAY_H})")))
+    setsel("Select_overdue", rpt_rowx(
+        rpt_td("concat('IT-',item()?['ID'])", "font-weight:700;color:#4338ca;"), rpt_td(rpt_esc(REQ)), rpt_td(rpt_esc("coalesce(item()?['Title'],'')")),
+        rpt_td(LASTTECH), rpt_td(f"div(int(coalesce(item()?['SLAHours'],0)),{DAY_H})", "font-weight:700;color:#dc2626;")))
+    setsel("Select_unassigned", rpt_rowx(
+        rpt_td("concat('IT-',item()?['ID'])", "font-weight:700;color:#4338ca;"), rpt_td(rpt_esc(REQ)), rpt_td(rpt_esc("coalesce(item()?['Title'],'')")),
+        rpt_td("string(item()?['SLAHours'])", "font-weight:700;color:#d97706;")))
+    setsel("Select_waiting", rpt_rowx(
+        rpt_td("concat('IT-',item()?['ID'])", "font-weight:700;color:#4338ca;"), rpt_td(rpt_esc(REQ)), rpt_td(rpt_esc("coalesce(item()?['Title'],'')")),
+        rpt_td("coalesce(item()?['Status']?['Value'],'')"), rpt_td(LASTTECH), rpt_td(f"div(int(coalesce(item()?['WaitingHours'],0)),{DAY_H})")))
     for nm in ("overdue", "unassigned", "waiting"):
         actions["Table_" + nm]["type"] = "Compose"
         actions["Table_" + nm]["inputs"] = f"@join(body('Select_{nm}'),'')"
     actions["Table_by_tech"]["type"] = "Select"
-    actions["Table_by_tech"]["inputs"] = {"from": "@variables('varByTech')", "select": rowx(
-        td("if(or(equals(item()?['Technician'],'Unassigned'),contains(toLower(item()?['Technician']),'it_support')),'',item()?['Technician'])", "font-weight:bold;"),
-        td(bar("#2563eb")), td("string(item()?['Open'])", "font-weight:bold;"),
-        td("string(item()?['Overdue'])", "color:#dc2626;font-weight:bold;"))}
+    actions["Table_by_tech"]["inputs"] = {"from": "@variables('varByTech')", "select": rpt_rowx(
+        rpt_td("if(or(equals(item()?['Technician'],'Unassigned'),contains(toLower(item()?['Technician']),'it_support')),'',item()?['Technician'])", "font-weight:700;"),
+        rpt_td(rpt_bar("#4338ca", "#eef0fd")), rpt_td("string(item()?['Open'])", "font-weight:700;"),
+        rpt_td("string(item()?['Overdue'])", "color:#dc2626;font-weight:700;"))}
     actions["Table_by_category"]["type"] = "Select"
-    actions["Table_by_category"]["inputs"] = {"from": "@variables('varByCategory')", "select": rowx(
-        td("coalesce(item()?['Category'],'Uncategorized')", "font-weight:bold;"),
-        td(bar("#7c3aed")), td("string(item()?['Tickets'])", "font-weight:bold;"))}
+    actions["Table_by_category"]["inputs"] = {"from": "@variables('varByCategory')", "select": rpt_rowx(
+        rpt_td("coalesce(item()?['Category'],'Uncategorized')", "font-weight:700;"),
+        rpt_td(rpt_bar("#0d9488", "#ccfbf1")), rpt_td("string(item()?['Tickets'])", "font-weight:700;"))}
     return "HD8 Daily report", {"Recurrence": recurrence([21], ALLDAYS)}, actions
 
 # ---------- HD9 Card actions ----------
@@ -2222,7 +2273,8 @@ def tech_sla():
 EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "HD4 Ticket updated",
                   "HD5 Planner task completed", "HD6 Hourly clock", "HD7 My open tickets", "HD8 Daily report",
                   "HD9 Card actions", "HD11 Tech thread replies", "HD12 Requester replies in Teams",
-                  "HD15 Dashboard stats", "HD16 Health check v2", "HD18 Quick close (SharePoint)"]
+                  "HD15 Dashboard stats", "HD16 Health check v2", "HD18 Quick close (SharePoint)",
+                  "HD23 Monthly report"]
 # IT Projects flows, checked separately from EXPECTED_FLOWS above - they get their own dashboard health bucket
 # (DASH_PROJHEALTH, "IT Project Systems") rather than folding into the aggregate "Flows" card/count.
 EXPECTED_PROJECT_FLOWS = ["HD19 Project created", "HD20 Project updated", "HD21 No-update check"]
@@ -2258,8 +2310,9 @@ FLOW_DESCRIPTIONS = {
         "gets a Teams+email ping on both of those.",
     "HD7 My open tickets": "\"My open tickets\" self-service Microsoft Forms lookup: a tech requests their own "
         "open/assigned tickets back.",
-    "HD8 Daily report": "Runs once at 9pm: emails Martin a report of tickets open longer than a business day "
-        "and tickets unassigned for 4+ hours.",
+    "HD8 Daily report": "Runs once at 9pm: emails Martin and Joseph a report of tickets open longer than a "
+        "business day and tickets unassigned for 4+ hours, archives a PDF copy to /Reports, and recycles any "
+        "archived daily report older than 30 days.",
     "HD9 Card actions": "Handles button clicks on the Teams adaptive card HD3/HD4 post (assign to me, change "
         "status, etc.) and updates the ticket accordingly.",
     "HD10 Ask requester in Teams": "Retired - requests for more info from a requester now go out as ordinary "
@@ -2292,6 +2345,9 @@ FLOW_DESCRIPTIONS = {
         "project untouched for 5+ days, repeating every day until the project is actually updated.",
     "HD22 Fix project permissions (run once)": "One-off, HD17's twin for IT Projects: sets per-item permissions "
         "(owners full control, Talal/Joseph Contribute, sponsor Read) on every existing project.",
+    "HD23 Monthly report": "Runs the 1st of each month at 9pm: emails Martin and Joseph a cumulative rollup "
+        "of the month that just ended (opened/closed counts, avg hours to close, tickets closed by "
+        "technician, tickets opened by category) and archives a PDF copy to /Reports.",
 }
 
 def hd16():
@@ -2947,6 +3003,92 @@ def hd22():
     acts["Get_projects"]["runAfter"] = ra("Get_owner_group")
     return "HD22 Fix project permissions (run once)", trig, acts
 
+# ---------- HD23 Monthly report ----------
+def hd23():
+    """Runs the 1st of each month at 9pm: a cumulative rollup of the month that just ended (opened/closed
+    counts, avg hours to close, tickets closed by technician, tickets opened by category) emailed to Martin
+    and Joseph like HD8, and archived as a PDF in /Reports named "IT Support Monthly Report - <Month Year>.pdf"
+    - a distinct prefix from HD8's "IT Support Help Desk Report - " daily archives, so HD8's 30-day daily
+    cleanup never matches or deletes a monthly rollup. Snapshot sections (Overdue/Unassigned/Waiting) don't
+    carry over from the daily report - those are point-in-time states, not totals over a month - so this only
+    covers cumulative figures. No self-check: like HD21, it's a scheduled sweep, not a per-item flow."""
+    fname = "IT Support Monthly Report - @{formatDateTime(outputs('LastMonthStartET'),'MMMM yyyy')}"
+    tiles = (rpt_tile("Tickets opened", "@{length(body('OpenedMonth')?['value'])}")
+           + rpt_tile("Tickets closed", "@{length(body('ResolvedMonth')?['value'])}")
+           + rpt_tile("Avg hours to close", "@{formatNumber(outputs('Average'),'0.1')}")
+           + rpt_tile("Still open from month", "@{length(body('Filter_still_open'))}"))
+    body_rows = (
+        "<tr><td style=\"padding:10px 0 0 0\"><table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+        "<tr>" + tiles + "</tr>"
+        "</table></td></tr>"
+        "<tr><td>"
+        + rpt_card("Closed tickets by technician", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('ResolvedMonth')?['value'])}",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("IT Support") + rpt_th("Share", " width=\"220\"") + rpt_th("Closed", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
+        + rpt_card("Opened tickets by category", "#0d9488", "#ccfbf1", "#0f766e", "@{length(body('OpenedMonth')?['value'])}",
+               "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("Category") + rpt_th("Share", " width=\"220\"") + rpt_th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
+        + "</td></tr>")
+    report = rpt_wrap(
+        "Monthly report &middot; @{formatDateTime(outputs('LastMonthStartET'),'MMMM yyyy')}",
+        "@{formatDateTime(outputs('LastMonthStartET'),'MMMM yyyy')}",
+        body_rows,
+        "Covers the full calendar month. Sent automatically by IT Support [Branthaven].")
+    by_tech_loop = {"type": "Foreach", "foreach": "@outputs('Techs')", "actions": seq([
+        ("Filter_this_tech", {"type": "Query", "inputs": {"from": "@body('ResolvedMonth')?['value']",
+            "where": "@equals(coalesce(item()?['AssignedTo']?['Email'],'Unassigned'),items('Apply_to_each_tech'))"}}),
+        ("Append_tech", {"type": "AppendToArrayVariable", "inputs": {"name": "varByTech", "value": {
+            "Technician": "@items('Apply_to_each_tech')", "Closed": "@length(body('Filter_this_tech'))",
+            "Pct": "@div(mul(length(body('Filter_this_tech')),100),max(length(body('ResolvedMonth')?['value']),1))"}}}),
+    ])}
+    by_cat_loop = {"type": "Foreach", "foreach": "@outputs('Categories')", "actions": seq([
+        ("Filter_this_category", {"type": "Query", "inputs": {"from": "@body('OpenedMonth')?['value']",
+            "where": "@equals(item()?['Category']?['Value'],items('Apply_to_each_category'))"}}),
+        ("Append_category", {"type": "AppendToArrayVariable", "inputs": {"name": "varByCategory", "value": {
+            "Category": "@items('Apply_to_each_category')", "Tickets": "@length(body('Filter_this_category'))",
+            "Pct": "@div(mul(length(body('Filter_this_category')),100),max(length(body('OpenedMonth')?['value']),1))"}}}),
+    ])}
+    actions = seq([
+        ("MonthStartET", compose(f"@startOfDay(convertTimeZone(utcNow(),'UTC','{TZ}'))")),
+        ("LastMonthStartET", compose("@addToTime(outputs('MonthStartET'),-1,'Month')")),
+        ("MonthStartUTC", compose(f"@convertTimeZone(outputs('MonthStartET'),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
+        ("LastMonthStartUTC", compose(f"@convertTimeZone(outputs('LastMonthStartET'),'{TZ}','UTC','yyyy-MM-ddTHH:mm:ssZ')")),
+        ("OpenedMonth", sp("GetItems", {"$filter": "Created ge '@{outputs('LastMonthStartUTC')}' and Created lt '@{outputs('MonthStartUTC')}'", "$top": 5000})),
+        ("ResolvedMonth", sp("GetItems", {"$filter": "(ResolvedOn ge '@{outputs('LastMonthStartUTC')}' and ResolvedOn lt '@{outputs('MonthStartUTC')}') or (ClosedOn ge '@{outputs('LastMonthStartUTC')}' and ClosedOn lt '@{outputs('MonthStartUTC')}' and ResolvedOn eq null)", "$top": 5000})),
+        ("Filter_still_open", {"type": "Query", "inputs": {"from": "@body('OpenedMonth')?['value']",
+            "where": f"@and(not(equals(item()?['Status']?['Value'],'{S_CLOSED}')),not(equals(item()?['Status']?['Value'],'{S_RES}')))"}}),
+        ("Init_varTotal", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varTotal", "type": "float", "value": 0}]}}),
+        ("Init_varByTech", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varByTech", "type": "array", "value": []}]}}),
+        ("Init_varByCategory", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varByCategory", "type": "array", "value": []}]}}),
+        ("Apply_to_each", {"type": "Foreach", "foreach": "@body('ResolvedMonth')?['value']", "actions": {
+            "Increment_varTotal": {"runAfter": {}, "type": "IncrementVariable", "inputs": {"name": "varTotal",
+                "value": "@float(coalesce(items('Apply_to_each')?['SLAHours'],0))"}}}}),
+        ("Average", compose("@if(equals(length(body('ResolvedMonth')?['value']),0),0,div(variables('varTotal'),float(length(body('ResolvedMonth')?['value']))))")),
+        ("Select_techs", {"type": "Select", "inputs": {"from": "@body('ResolvedMonth')?['value']", "select": "@coalesce(item()?['AssignedTo']?['Email'],'Unassigned')"}}),
+        ("Techs", compose("@union(body('Select_techs'),body('Select_techs'))")),
+        ("Apply_to_each_tech", by_tech_loop),
+        ("Table_by_tech", {"type": "Select", "inputs": {"from": "@variables('varByTech')", "select": rpt_rowx(
+            rpt_td("if(or(equals(item()?['Technician'],'Unassigned'),contains(toLower(item()?['Technician']),'it_support')),'',item()?['Technician'])", "font-weight:700;"),
+            rpt_td(rpt_bar("#4338ca", "#eef0fd")), rpt_td("string(item()?['Closed'])", "font-weight:700;"))}}),
+        ("Select_categories", {"type": "Select", "inputs": {"from": "@body('OpenedMonth')?['value']", "select": "@item()?['Category']?['Value']"}}),
+        ("Categories", compose("@union(body('Select_categories'),body('Select_categories'))")),
+        ("Apply_to_each_category", by_cat_loop),
+        ("Table_by_category", {"type": "Select", "inputs": {"from": "@variables('varByCategory')", "select": rpt_rowx(
+            rpt_td("coalesce(item()?['Category'],'Uncategorized')", "font-weight:700;"),
+            rpt_td(rpt_bar("#0d9488", "#ccfbf1")), rpt_td("string(item()?['Tickets'])", "font-weight:700;"))}}),
+        ("ReportHtml", compose(report)),
+        ("Create_file_OneDrive", op("shared_onedriveforbusiness", "CreateFile", {
+            "folderPath": "/HelpDeskReports", "name": fname + ".html", "body": "@outputs('ReportHtml')"})),
+        ("Delay", {"type": "Wait", "inputs": {"interval": {"count": 30, "unit": "Second"}}}),
+        ("Convert_file", op("shared_onedriveforbusiness", "ConvertFile", {"id": "@body('Create_file_OneDrive')?['Id']", "type": "PDF"})),
+        ("Create_file_Reports", op("shared_sharepointonline", "CreateFile", {
+            "dataset": SITE, "folderPath": "/Reports", "name": fname + ".pdf", "body": "@body('Convert_file')"})),
+        ("Email_me_the_report", {**mail(f"{ME};{TECH2}", "IT Support Monthly Report - @{formatDateTime(outputs('LastMonthStartET'),'MMMM yyyy')}", "@{outputs('ReportHtml')}"),
+            "runAfter": ra("Create_file_Reports", status=("Succeeded", "Failed"))}),
+    ])
+    monthly_trig = {"type": "Recurrence", "recurrence": {
+        "frequency": "Month", "interval": 1, "timeZone": TZ,
+        "schedule": {"monthDays": [1], "hours": ["21"], "minutes": [0]}}}
+    return "HD23 Monthly report", {"Recurrence": monthly_trig}, actions
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -3006,7 +3148,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
