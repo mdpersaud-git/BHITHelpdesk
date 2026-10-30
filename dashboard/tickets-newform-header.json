@@ -1,0 +1,140 @@
+{
+  "elmType": "div",
+  "style": {
+    "position": "relative",
+    "display": "flex",
+    "align-items": "center",
+    "justify-content": "space-between",
+    "gap": "16px",
+    "padding": "30px 28px",
+    "background-color": "#0f172a",
+    "border-radius": "8px",
+    "border-bottom": "2px solid #0e7490",
+    "color": "#ffffff",
+    "margin-bottom": "8px",
+    "overflow": "hidden"
+  },
+  "children": [
+    {
+      "elmType": "div",
+      "style": {
+        "position": "absolute",
+        "top": "-55px",
+        "right": "-25px",
+        "width": "170px",
+        "height": "170px",
+        "border-radius": "50%",
+        "background-color": "rgba(255,255,255,0.05)"
+      },
+      "children": []
+    },
+    {
+      "elmType": "div",
+      "style": {
+        "position": "absolute",
+        "bottom": "-70px",
+        "right": "90px",
+        "width": "130px",
+        "height": "130px",
+        "border-radius": "50%",
+        "background-color": "rgba(255,255,255,0.04)"
+      },
+      "children": []
+    },
+    {
+      "elmType": "div",
+      "style": {
+        "position": "relative",
+        "z-index": "1",
+        "display": "flex",
+        "align-items": "center",
+        "gap": "16px"
+      },
+      "children": [
+        {
+          "elmType": "div",
+          "style": {
+            "display": "flex",
+            "align-items": "center",
+            "justify-content": "center",
+            "width": "52px",
+            "height": "52px",
+            "border-radius": "10px",
+            "background-color": "rgba(255,255,255,0.14)",
+            "flex-shrink": "0"
+          },
+          "children": [
+            {
+              "elmType": "span",
+              "attributes": { "iconName": "Ticket" },
+              "style": { "font-size": "26px", "color": "#ffffff" }
+            }
+          ]
+        },
+        {
+          "elmType": "div",
+          "children": [
+            {
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'New IT Ticket', [$Title])",
+              "style": {
+                "font-size": "34px",
+                "font-weight": "600",
+                "letter-spacing": "1px",
+                "line-height": "1.12",
+                "color": "#ffffff"
+              }
+            },
+            {
+              "elmType": "div",
+              "txtContent": "=if([$Title] == '', 'BRANTHAVEN · IT Help Desk', 'BRANTHAVEN · IT Help Desk · IT-' + [$ID])",
+              "style": {
+                "font-size": "13px",
+                "color": "#9fb0d6",
+                "margin-top": "7px",
+                "letter-spacing": "0.8px"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "elmType": "div",
+      "style": {
+        "position": "relative",
+        "z-index": "1",
+        "display": "flex",
+        "align-items": "center",
+        "gap": "7px",
+        "padding": "8px 15px",
+        "border-radius": "20px",
+        "flex-shrink": "0",
+        "background-color": "=if([$Title] == '', 'rgba(255,255,255,0.14)', if([$Status] == 'Open', '#605e5c', if([$Status] == 'Assigned', '#004578', if([$Status] == 'In Progress', '#0b6a6a', if([$Status] == 'Escalated or Waiting Internally', '#a4262c', if([$Status] == 'Waiting for End User', '#6d5700', if([$Status] == 'To Be Scheduled', '#5c2e91', if([$Status] == 'Resolved Pending Confirmation', '#0b6a0b', '#323130'))))))))"
+      },
+      "children": [
+        {
+          "elmType": "span",
+          "style": {
+            "width": "8px",
+            "height": "8px",
+            "border-radius": "50%",
+            "background-color": "#22c55e",
+            "flex-shrink": "0"
+          }
+        },
+        {
+          "elmType": "span",
+          "txtContent": "=if([$Title] == '', 'NEW TICKET', [$Status])",
+          "style": {
+            "font-size": "11px",
+            "font-weight": "700",
+            "letter-spacing": "1px",
+            "color": "#ffffff",
+            "text-transform": "uppercase"
+          }
+        }
+      ]
+    }
+  ]
+}
