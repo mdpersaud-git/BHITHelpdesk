@@ -1124,6 +1124,32 @@ def hd4():
             "runAfter": ra("Question_missing", status=("Succeeded", "Failed", "Skipped"))}),
     ])
 
+    # Part D: a tech-only internal note. InternalNotes is a plain running log, same "type your new entry at
+    # the top, pushing older text down" convention as IT Projects' InternalNotes (HD20) - there's no dedicated
+    # "add internal note" box, techs type directly into the field and the flow diffs the length against
+    # LastNotifiedInternalLen to find just the newly-added leading text. Never shown to the requester - Note to
+    # requester/Conversation (both of which do reach the requester, Conversation via the "earlier" ticket-history
+    # paragraph in partA/partC's emails) are untouched by this; InternalNotes is a wholly separate field. Notifies
+    # every tech (Martin, Talal, Joseph - TECHS), not just the one who didn't write it, same as HD20 notifying
+    # every project Owner regardless of who added the internal note.
+    internal_len = f"length(coalesce({t('InternalNotes')},''))"
+    internal_changed = f"greater({internal_len},coalesce({t('LastNotifiedInternalLen')},0))"
+    _IN = f"coalesce({t('InternalNotes')},'')"
+    # substring()'s base string is padded with a trailing space first (per CLAUDE.md) - InternalNotes can be
+    # empty, and substring('',0,0) throws "start index must be less than the length of the string". The
+    # LastNotifiedInternalLen Number column always comes back as Float from the SharePoint REST connector, which
+    # widens the whole expression to Float and substring()'s length parameter rejects that - wrap in int(...)
+    # (same fix HD20 needed for the identical bug on IT Projects, see its docstring).
+    new_internal_text = f"substring(concat({_IN},' '),0,int(min({internal_len},max(0,sub({internal_len},coalesce({t('LastNotifiedInternalLen')},0))))))"
+    tech_emails = [e for e, _ in TECHS]
+    partD = seq([
+        ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
+        ("Email_internal_note", mail(";".join(tech_emails), f"[IT-@{{{ID}}}] Internal note: @{{{t('Title')}}}",
+            style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p>@{{outputs('InternalLine')}}<p>{lnk}</p></div>")),
+    ])
+    partD["Tell_techs_internal_note"] = {"type": "Scope", "runAfter": ra("Email_internal_note", status=("Succeeded", "Failed")),
+        "actions": team_msgs("Internal_note_msg", f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}", tech_emails)}
+
     def var(name, typ, val):
         return {"type": "InitializeVariable", "inputs": {"variables": [{"name": name, "type": typ, "value": val}]}}
     ALL = ("Succeeded", "Failed", "Skipped", "TimedOut")
@@ -1211,11 +1237,14 @@ def hd4():
                                   "runAfter": ra("Part_B_tech_assigned", status=ALL)}),
         ("Part_C_status_changed", {**cond(f"@not(equals({V},coalesce({t('LastNotifiedStatus')},'')))", partC),
                                    "runAfter": ra("Part_A_note_for_user", status=ALL)}),
+        ("Part_D_internal_note", {**cond(f"@{internal_changed}", partD),
+                                  "runAfter": ra("Part_C_status_changed", status=ALL)}),
         # Keep the Planner task's own Notes in sync with the ticket: a note added, a status change, and the
         # resolution text on Resolved/Closed (StatusLine already folds "· Resolution: ..." into the conversation
         # line, so it shows up here too) all land in the task without anyone opening SharePoint. Rebuilt in full
         # each run — simpler and more robust than trying to append — and capped well under Planner's description
-        # limit.
+        # limit. Deliberately does not include InternalNotes - the Planner task is visible to anyone who can see
+        # the Planner plan, not techs-only, same reason InternalNotes never reaches the requester's own emails.
         ("Sync_task_notes", {**cond(hasTask, {
             "Update_task_notes": op("shared_planner", "UpdateTaskDetails_V2", {
                 "id": f"@{t('PlannerTaskId')}",
@@ -1224,7 +1253,7 @@ def hd4():
                     # when this run touched neither a note nor a status (e.g. just an attachment added), which can be empty
                     f"string({ID}),decodeUriComponent('%0A%0A'),substring(concat(variables('varConversation'),' '),0,"
                     f"min(length(variables('varConversation')),1800)))"})}),
-            "runAfter": ra("Part_C_status_changed", status=ALL)}),
+            "runAfter": ra("Part_D_internal_note", status=ALL)}),
         # ticks between the SLA start (7am rule) and the first response; 0 when there is no first response yet
         ("ResponseTicks", {**compose(f"@if(empty(variables('varFirstResponse')),0,sub(ticks(variables('varFirstResponse')),{sla_start_ticks(t('Created'))}))"),
                            "runAfter": ra("Sync_task_notes", status=ALL)}),
@@ -1233,6 +1262,7 @@ def hd4():
             "item/Status/Value": f"@{V}",
             "item/LastNotifiedStatus": f"@{V}",
             "item/LastNotifiedTech": "@outputs('Tech')",
+            "item/LastNotifiedInternalLen": f"@{internal_len}",
             "item/NoteToUser": "@null",
             "item/Conversation": "@variables('varConversation')",
             "item/FirstResponseOn": "@if(empty(variables('varFirstResponse')),null,variables('varFirstResponse'))",
@@ -1257,18 +1287,19 @@ def hd4():
             "runAfter": ra("Update_item", status=("Succeeded", "Failed"))}),
     ])
     # Monitoring: did every requester/tech notification for this update go out?
-    actions.update(self_check("Health", ["Close_guard", "Part_B_tech_assigned", "Part_A_note_for_user", "Part_C_status_changed"],
+    actions.update(self_check("Health", ["Close_guard", "Part_B_tech_assigned", "Part_A_note_for_user", "Part_C_status_changed", "Part_D_internal_note"],
         f"[Help desk health] Notification problem on ticket update IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
         leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
-              "Email_new_tech", "New_tech_msg")))
+              "Email_new_tech", "New_tech_msg", "Email_internal_note", "Internal_note_msg_0", "Internal_note_msg_1", "Internal_note_msg_2")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
         "not(equals(toLower(coalesce(triggerOutputs()?['body/AssignedTo/Email'],'')),toLower(coalesce(triggerOutputs()?['body/LastNotifiedTech'],'')))),"
-        "greater(length(coalesce(triggerOutputs()?['body/NoteToUser'],'')),0))"}]
+        "greater(length(coalesce(triggerOutputs()?['body/NoteToUser'],'')),0),"
+        "greater(length(coalesce(triggerOutputs()?['body/InternalNotes'],'')),coalesce(triggerOutputs()?['body/LastNotifiedInternalLen'],0)))"}]
     return "HD4 Ticket updated", {"When_an_item_is_created_or_modified": trig}, actions
 
 # ---------- HD5 Planner task completed ----------
