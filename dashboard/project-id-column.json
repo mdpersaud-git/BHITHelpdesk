@@ -1,5 +1,28 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
   "elmType": "div",
-  "txtContent": "='PRJ-' + @currentField"
+  "children": [
+    {
+      "elmType": "div",
+      "txtContent": "='PRJ-' + @currentField"
+    },
+    {
+      "elmType": "button",
+      "txtContent": "+ Add task",
+      "customRowAction": {
+        "action": "executeFlow",
+        "actionParams": "{\"id\":\"ab2fc62d-6661-4010-af0e-2671e64f682e\"}"
+      },
+      "style": {
+        "margin-top": "4px",
+        "padding": "2px 8px",
+        "font-size": "11px",
+        "border": "1px solid #2563eb",
+        "border-radius": "4px",
+        "background-color": "white",
+        "color": "#2563eb",
+        "cursor": "pointer"
+      }
+    }
+  ]
 }
