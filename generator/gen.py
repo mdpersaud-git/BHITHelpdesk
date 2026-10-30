@@ -1037,6 +1037,25 @@ def hd4():
         ("AssignedLine", {**compose(f"@concat('[',{stamp},' | ',{who},'] Assigned to ',{t('AssignedTo/DisplayName')},decodeUriComponent('%0A%0A'),variables('varConversation'))"),
                           "runAfter": ra("Reassigned_same_status", status=("Succeeded", "Failed", "Skipped"))}),
         ("Set_varConversation_assigned", {"type": "SetVariable", "inputs": {"name": "varConversation", "value": "@outputs('AssignedLine')"}}),
+        # Added 2026-10-30: the new tech themselves gets told directly, by email and Teams — previously the
+        # only reassignment notification was to the requester (Reassigned_same_status above, and only when
+        # the status wasn't changing in the same edit), and the "new tech" side relied entirely on Planner's
+        # own native assignment notification (AssignUsers above), which only fires if that person happens to
+        # have Planner notifications turned on in Outlook/Teams - i.e. often not at all. Fires on every
+        # assignment (first-time or reassignment) that reaches Part_B_tech_assigned - that condition already
+        # excludes a tech being set at the same moment the ticket goes to Resolved/Closed, so this never fires
+        # on a closing ticket. Deliberately does not also notify the outgoing tech - not asked for; add a
+        # symmetric "Tell_old_tech"/"Email_old_tech" pair (keyed off LastNotifiedTech) if that's wanted too.
+        ("Email_new_tech", mail(f"@{t('AssignedTo/Email')}", f"[IT-@{{{ID}}}] Ticket assigned to you: @{{{t('Title')}}}",
+            style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p>"
+            f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
+            f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
+            f"<p>@{{{t('Title')}}}</p><p>{lnk}</p></div>", after=ra("Set_varConversation_assigned"))),
+        ("Tell_new_tech", {**scope_msg("New_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
+            f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
+            f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
+            f"<p>@{{{t('Title')}}}</p><p>{lnk}</p>"),
+            "runAfter": ra("Set_varConversation_assigned")}),
     ])
 
     # Part A: a note for the user. Logged always; sent on its own only when the status is not changing
@@ -1243,7 +1262,8 @@ def hd4():
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
-        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes")))
+        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
+              "Email_new_tech", "New_tech_msg")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
