@@ -231,14 +231,19 @@ def people_contains(expr, email_expr):
 
 def task_line():
     """Expression for a 'Select' action's `select` (no leading @) run over a Project Tasks GetItems body -
-    one bullet line per task: title, Status, Assigned To's display name (or 'Unassigned'), and a '(due ...)'
-    suffix when Due Date is set. Used to build TaskDetails (the full per-task list shown in the
-    project's own form footer) alongside the existing Task_x0020_Progress rollup count - see hd24()/hd25()."""
+    one bullet line per task: title, Status, Assigned To's display name (or 'Unassigned'), a '(due ...)'
+    suffix when Due Date is set, and (added 2026-10-30) a trailing ' — "<Notes>"' suffix when the task's
+    Notes field is non-empty - previously Notes only ever reached the assignee once, in HD24's creation
+    email, and never showed up anywhere on the parent project; now it's visible in the same rollup as
+    everything else. Used to build TaskDetails (the full per-task list shown in the project's own form
+    footer) alongside the existing Task_x0020_Progress rollup count - see hd24()/hd25()."""
     return ("concat('• ',coalesce(item()?['Title'],'(untitled task)'),' — ',"
             "coalesce(item()?['Status']?['Value'],'Not Started'),' — ',"
             "coalesce(item()?['Assigned_x0020_To']?['DisplayName'],'Unassigned'),"
             "if(empty(coalesce(item()?['Due_x0020_Date'],'')),'',"
-            "concat(' (due ',formatDateTime(item()?['Due_x0020_Date'],'MMM d'),')')))")
+            "concat(' (due ',formatDateTime(item()?['Due_x0020_Date'],'MMM d'),')')),"
+            "if(empty(coalesce(item()?['Notes'],'')),'',"
+            "concat(' — \"',item()?['Notes'],'\"')))")
 
 def notify_each(prefix, csv_expr, html, exclude=()):
     """1:1-message every non-empty, internal, non-excluded address in a `;`-joined email string
