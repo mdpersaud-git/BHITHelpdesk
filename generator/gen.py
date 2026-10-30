@@ -3437,32 +3437,102 @@ def hd27():
     link with a ?ProjectID=<n> query-string pre-fill does NOT work on this list in this tenant (confirmed live
     2026-10-29: the field came up as a blank "Enter a number" placeholder), so a plain link-out button would
     leave the tech typing the ProjectID by hand. Instead this flow collects the task's title (required) and,
-    optionally, the assignee's email, directly in the "Run flow" panel's own input boxes, then creates the
-    Project Tasks row itself with ProjectID already set to the clicked project. HD24 (Project task created)
-    then fires on that new row exactly as it would for a task added directly in Project Tasks - sending the
-    usual creation notifications and patching the parent project's Task Progress rollup - so this flow does
-    none of that itself, only the creation."""
+    optionally, an assignee, directly in the "Run flow" panel's own input boxes, then creates the Project Tasks
+    row itself with ProjectID already set to the clicked project. HD24 (Project task created) then fires on
+    that new row exactly as it would for a task added directly in Project Tasks - sending the usual creation
+    notifications and patching the parent project's Task Progress rollup - so this flow does none of that
+    itself, only the creation.
+
+    "Assign to" resolution (added 2026-10-29): a SharePoint "For a selected item" trigger's input schema has
+    no Person/people-picker type (Text/Yes-No/File/Email/Number/Date only), so the Run-flow panel can never
+    render a real chooser here - "Assign to" stays a plain text box. With 75 end users, neither a cheat-sheet
+    of known emails (not everyone's a tech) nor requiring an exact email (nobody has 75 addresses memorized)
+    is realistic, so the flow accepts either an email or a name and resolves it properly before creating the
+    task, rather than writing whatever was typed straight into Assigned_x0020_To/Claims as the pre-2026-10-29
+    version of this flow did:
+      - Contains '@': resolved with `_api/web/ensureuser` (exact match against the tenant directory, same
+        call used elsewhere in this codebase, e.g. give_techs_contribute/Ensure_sponsor). Not found -> the
+        task isn't created; the clicker is told their email didn't match anyone.
+      - No '@': resolved by name against `_api/SP.UI.ApplicationPages.ClientPeoplePickerWebServiceInterface.
+        ClientPeoplePickerSearchUser` (PrincipalType=1 users only, PrincipalSource=15 tenant directory) - the
+        same fuzzy partial-name search the native people-picker field itself uses, confirmed live 2026-10-29:
+        no `__metadata` wrapper on the request (that 400s with "The property '__metadata' does not exist"),
+        and the response is double-encoded - a top-level {"value": "<json string>"} where the string itself
+        needs a second json() to parse into the candidate array (items shaped like
+        {"Key": "i:0#.f|membership|...", "DisplayText": "Full Name", "EntityData": {"Email": "...", ...}}).
+        Exactly one candidate -> use it. Zero or 2+ -> the task isn't created; the clicker is told either
+        nobody matched or who the ambiguous candidates were, so they can retype something more specific
+        (a fuller name, or just the email) rather than the flow silently guessing or creating a task with no
+        assignee. Clicker identity comes from the same base64 `x-ms-user-email-encoded` trigger header HD18
+        uses, not from a connector login name.
+      - Empty "Assign to": unchanged, the task is created with no assignee.
+    A blank Assign-to box or a typo therefore either works or fails loudly with a chat message - never a task
+    silently assigned to a garbage, unresolved Claims string."""
     trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
         "operationId": "GetItemHybridTriggerSchema",
         "parameters": {"dataset": SITE, "table": PROJECTS},
         "schema": {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {
             "text": {"description": "What the task is", "title": "Task title", "type": "string",
                      "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
-            "text_1": {"description": "Optional: assignee's email", "title": "Assign to (optional)", "type": "string",
+            "text_1": {"description": "Optional: name or email", "title": "Assign to (optional)", "type": "string",
                        "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
             "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
                        "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
         "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
         "splitOn": "@triggerBody()['rows']"}}
-    acts = seq([
-        ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
-        ("TaskTitle", compose("@trim(coalesce(triggerBody()?['text'],''))")),
-        ("AssigneeEmail", compose("@trim(toLower(coalesce(triggerBody()?['text_1'],'')))")),
-        ("Create_task", spt("PostItem", {
+
+    def make_create(claims_expr, after=None):
+        a = spt("PostItem", {
             "item/Title": "@outputs('TaskTitle')",
             "item/ProjectID": "@outputs('ProjectId')",
             "item/Status/Value": PT_STATUSES[0],
-            "item/Assigned_x0020_To/Claims": "@if(empty(outputs('AssigneeEmail')),null,outputs('AssigneeEmail'))"})),
+            "item/Assigned_x0020_To/Claims": claims_expr})
+        if after:
+            a["runAfter"] = after
+        return a
+
+    not_created = lambda why: (f"<p>Task \"@{{outputs('TaskTitle')}}\" on this project wasn't created - "
+        f"\"@{{outputs('AssigneeText')}}\" {why}. Re-run <b>Add task</b> with a valid name or email.</p>")
+
+    search_body = ('{"queryParams":{"AllowEmailAddresses":true,"AllowMultipleEntities":false,'
+                   '"MaximumEntitySuggestions":20,"PrincipalSource":15,"PrincipalType":1,'
+                   '"QueryString":"@{outputs(\'AssigneeText\')}"}}')
+
+    acts = seq([
+        ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
+        ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
+        ("TaskTitle", compose("@trim(coalesce(triggerBody()?['text'],''))")),
+        ("AssigneeText", compose("@trim(coalesce(triggerBody()?['text_1'],''))")),
+        ("Resolve_assignee", cond("@not(empty(outputs('AssigneeText')))", {
+            "Is_email": cond("@contains(outputs('AssigneeText'),'@')", seq([
+                ("Ensure_by_email", sp_http("POST", "_api/web/ensureuser",
+                    body="{\"logonName\":\"i:0#.f|membership|@{toLower(outputs('AssigneeText'))}\"}")),
+                ("Create_task_email", make_create("@body('Ensure_by_email')?['LoginName']", after=ra("Ensure_by_email"))),
+                ("Email_not_found", {**scope_msg("Email_nf", "@outputs('Clicker')",
+                    not_created("doesn't match anyone in Branthaven's directory")),
+                    "runAfter": ra("Ensure_by_email", status=("Failed",))}),
+            ]), seq([
+                ("Search_by_name", sp_http("POST",
+                    "_api/SP.UI.ApplicationPages.ClientPeoplePickerWebServiceInterface.ClientPeoplePickerSearchUser",
+                    body=search_body)),
+                ("Candidates", compose("@json(coalesce(body('Search_by_name')?['value'],'[]'))")),
+                ("Match_count", compose("@length(outputs('Candidates'))")),
+                ("Resolve_by_name", {"type": "Switch", "expression": "@string(outputs('Match_count'))", "cases": {
+                    "One_match": {"case": "1", "actions": {
+                        "Create_task_name": make_create("@outputs('Candidates')[0]?['Key']")}},
+                    "No_match": {"case": "0", "actions": {
+                        "Name_no_match": scope_msg("Name_nf", "@outputs('Clicker')",
+                            not_created("didn't match anyone in Branthaven's directory"))}},
+                }, "default": {"actions": seq([
+                    ("Candidate_names", {"type": "Select", "runAfter": {},
+                        "inputs": {"from": "@outputs('Candidates')", "select": "@item()?['DisplayText']"}}),
+                    ("Name_ambiguous", scope_msg("Name_amb", "@outputs('Clicker')",
+                        not_created("matched more than one person: @{join(body('Candidate_names'),', ')}"))),
+                ])}}),
+            ])),
+        }, {
+            "Create_task_unassigned": make_create("null"),
+        })),
     ])
     return "HD27 Add project task (from project)", trig, acts
 
