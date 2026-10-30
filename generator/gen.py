@@ -19,7 +19,9 @@ PT_STATUSES = ["Not Started", "In Progress", "Completed"]
 # keep PT_STATUSES in sync with: the Project Tasks list's Status choice column
 # Project Tasks columns (internal names, SharePoint auto-encoded spaces to _x0020_ - confirmed live, don't "clean" these):
 #   Title, ProjectID (Number), Assigned_x0020_To (Person), Status (Choice), Due_x0020_Date (DateTime, DateOnly),
-#   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text)
+#   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text), LastNotifiedNotes (Text, added 2026-10-30 -
+#   same no-Show*Form-restriction pattern as its two siblings, a plain bookkeeping field HD24/HD25 stamp/compare,
+#   see hd25()'s docstring for why Notes needed one of these too)
 # IT Projects columns added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 tasks complete") and
 # TaskDetails (Multiple lines of plain text, a bullet-per-task list - title/Status/assignee/due date -
 # shown as a normal field on the project item itself, via "Edit columns in the form"; ShowInEditForm/
@@ -3149,8 +3151,10 @@ def hd24():
     a normal field on the project item itself so it shows every task's status and assignee, not just the
     rollup count (added 2026-10-29 - the original build deliberately showed only the rollup; Martin asked
     for the full per-task detail too). The assignee still needs to stay on track day to day though, which is
-    what HD26's daily nudge is for, not a bigger one-time ping here. Stamps LastNotifiedStatus/LastNotifiedAssignee
-    on the new task so HD25 has a clean baseline to compare against on the next edit."""
+    what HD26's daily nudge is for, not a bigger one-time ping here. Stamps LastNotifiedStatus/LastNotifiedAssignee/
+    LastNotifiedNotes on the new task so HD25 has a clean baseline to compare against on the next edit - the
+    LastNotifiedNotes baseline (added 2026-10-30) is what lets HD25 refresh TaskDetails on a Notes-only edit too,
+    not just a Status/Assigned-To change (see hd25()'s docstring)."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
@@ -3224,7 +3228,8 @@ def hd24():
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
             "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
-            "item/LastNotifiedAssignee": f"@{AsEmail}"}),
+            "item/LastNotifiedAssignee": f"@{AsEmail}",
+            "item/LastNotifiedNotes": f"@coalesce({pt('Notes')},'')"}),
             "runAfter": ra("Update_project_progress", status=("Succeeded", "Failed"))}),
     ])
     actions.update(self_check("Health", ["Tell_assignee", "Tell_creator", "Tell_owners"],
@@ -3239,29 +3244,33 @@ def hd24():
 
 # ---------- HD25 Project task updated ----------
 def hd25():
-    """Fires on every create/edit of a Project Tasks item. Compares the current Status and Assigned To against
-    what was notified last time (LastNotifiedStatus/LastNotifiedAssignee - stamped by HD24 on creation and by
-    this flow at the end of every run) to find what's actually new; a plain re-trigger off its own Update_task
-    write at the end finds nothing changed and exits quietly via the trigger-level `conditions` below - the
-    exact same self-retrigger-forever shape HD20 documents and fixes for IT Projects itself (see its docstring
-    and the CLAUDE.md note it's built from), reproduced here because Update_task's own PatchItem bumps Modified
-    on every run the same way.
+    """Fires on every create/edit of a Project Tasks item. Compares the current Status, Assigned To and Notes
+    against what was notified last time (LastNotifiedStatus/LastNotifiedAssignee/LastNotifiedNotes - stamped by
+    HD24 on creation and by this flow at the end of every run) to find what's actually new; a plain re-trigger
+    off its own Update_task write at the end finds nothing changed and exits quietly via the trigger-level
+    `conditions` below - the exact same self-retrigger-forever shape HD20 documents and fixes for IT Projects
+    itself (see its docstring and the CLAUDE.md note it's built from), reproduced here because Update_task's own
+    PatchItem bumps Modified on every run the same way.
     Looks up the parent project once (via ProjectID) for its Owner(s)/creator. A reassignment (a new Assigned To,
     not simultaneously being marked Completed) notifies the new assignee the same way HD24 does on creation -
     they need the heads-up even though the task itself isn't new. Moving Status to Completed notifies the
     assignee (confirmation) and every project Owner + the creator (who finished it, so they know); any other
     status change (e.g. back to In Progress) doesn't get its own notification - only completion and reassignment
     are noteworthy enough to interrupt anyone, and HD26's daily sweep already keeps an unfinished task visible.
+    A Notes-only edit never gets a notification of its own either - it's not urgent enough to interrupt anyone,
+    same reasoning as a bare status bounce.
     Recomputes and patches the parent project's Task Progress rollup AND TaskDetails (the full per-task
-    list shown as a normal field on the project item itself - see hd24()'s docstring) whenever Status OR Assigned To changed,
-    since a bare reassignment doesn't move the rollup count but does change what TaskDetails should show
-    for that task. Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way.
+    list shown as a normal field on the project item itself - see hd24()'s docstring) whenever Status, Assigned To,
+    OR Notes changed (widened 2026-10-30 to include Notes - task_line() now folds Notes into the TaskDetails
+    bullet, so an edit to Notes alone needs to refresh the rollup even though it moves neither the progress count
+    nor triggers a notification). Restamps LastNotifiedStatus/LastNotifiedAssignee/LastNotifiedNotes at the end
+    either way.
     The trigger-level condition also requires LastNotifiedStatus to already be stamped (non-empty) before this
-    flow runs at all - without that guard, a brand-new task's blank LastNotifiedStatus/LastNotifiedAssignee
-    makes status_changed/assignee_changed look true on the very item-created event HD24 is already handling,
-    so HD25 races HD24 and fires its own (duplicate) reassignment notification before HD24 ever gets to stamp
-    LastNotifiedAssignee. Once HD24 finishes its first pass on a task, LastNotifiedStatus is never blank again,
-    so every genuine later edit still evaluates normally."""
+    flow runs at all - without that guard, a brand-new task's blank LastNotifiedStatus/LastNotifiedAssignee/
+    LastNotifiedNotes makes status_changed/assignee_changed/notes_changed look true on the very item-created
+    event HD24 is already handling, so HD25 races HD24 and fires its own (duplicate) reassignment notification
+    before HD24 ever gets to stamp LastNotifiedAssignee. Once HD24 finishes its first pass on a task,
+    LastNotifiedStatus is never blank again, so every genuine later edit still evaluates normally."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
@@ -3270,6 +3279,7 @@ def hd25():
     AsName = f"coalesce({pt('Assigned_x0020_To/DisplayName')},'Unassigned')"
     status_changed = f"not(equals({V},coalesce({pt('LastNotifiedStatus')},'')))"
     assignee_changed = f"not(equals({AsEmail},coalesce({pt('LastNotifiedAssignee')},'')))"
+    notes_changed = f"not(equals(coalesce({pt('Notes')},''),coalesce({pt('LastNotifiedNotes')},'')))"
     completed_now = f"equals({V},'Completed')"
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
@@ -3347,7 +3357,7 @@ def hd25():
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'',"
             "join(body('TaskLines'),decodeUriComponent('%0A')))"),
             "runAfter": ra("ProgressText")}),
-        ("Update_project_progress", {**cond(f"@or({status_changed},{assignee_changed})",
+        ("Update_project_progress", {**cond(f"@or({status_changed},{assignee_changed},{notes_changed})",
             {"Patch_progress": spp("PatchItem", {"id": f"@{PID}",
                 "item/Title": "@coalesce(body('Get_project')?['Title'],'')",
                 "item/Task_x0020_Progress": "@outputs('ProgressText')",
@@ -3355,7 +3365,8 @@ def hd25():
             "runAfter": ra("TaskDetailsText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
-            "item/LastNotifiedStatus": f"@{V}", "item/LastNotifiedAssignee": f"@{AsEmail}"}),
+            "item/LastNotifiedStatus": f"@{V}", "item/LastNotifiedAssignee": f"@{AsEmail}",
+            "item/LastNotifiedNotes": f"@coalesce({pt('Notes')},'')"}),
             "runAfter": ra("Update_project_progress", status=("Succeeded", "Failed", "Skipped"))}),
     ])
     actions.update(self_check("Health", ["Reassigned_change", "Completed_change"],
@@ -3368,7 +3379,7 @@ def hd25():
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     already_processed_once = f"not(empty(coalesce({pt('LastNotifiedStatus')},'')))"
     trig = sp_trigger("GetOnUpdatedItems", PROJTASKS)
-    trig["conditions"] = [{"expression": f"@and({already_processed_once},or({status_changed},{assignee_changed}))"}]
+    trig["conditions"] = [{"expression": f"@and({already_processed_once},or({status_changed},{assignee_changed},{notes_changed}))"}]
     return "HD25 Project task updated v2", {"When_an_item_is_created_or_modified": trig}, actions
 
 # ---------- HD26 Project task overdue check ----------
