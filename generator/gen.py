@@ -20,7 +20,12 @@ PT_STATUSES = ["Not Started", "In Progress", "Completed"]
 # Project Tasks columns (internal names, SharePoint auto-encoded spaces to _x0020_ - confirmed live, don't "clean" these):
 #   Title, ProjectID (Number), Assigned_x0020_To (Person), Status (Choice), Due_x0020_Date (DateTime, DateOnly),
 #   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text)
-# IT Projects rollup column added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 tasks complete")
+# IT Projects columns added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 tasks complete") and
+# TaskDetails (Multiple lines of plain text, a bullet-per-task list - title/Status/assignee/due date -
+# shown as a normal field on the project item itself, via "Edit columns in the form"; ShowInEditForm/
+# ShowInNewForm = TRUE, ShowInDisplayForm/ShowInViewForms = FALSE - see "Full per-task details on the
+# project item" in docs/IT-Tech-Guide.md for why this needed the opposite Show*Form trade-off from the
+# usual hidden-field convention (CLAUDE.md), added 2026-10-29)
 HOLIDAYS = "430cd9b6-9cdc-45a2-8e9b-66a88cd19b74"
 EXTERNAL_SENDERS = "37b12028-370c-4b21-b31c-11362129c7fe"   # "External Senders" allow-list: Title = domain or full address
 MBX = "IT_Support@branthaven.com"
@@ -223,6 +228,17 @@ def people_contains(expr, email_expr):
     contains(select(...)) despite looking like it should be able to."""
     return (f"contains(toLower(string(coalesce({expr},json('[]')))),"
             f"concat('\"email\":\"',{email_expr},'\"'))")
+
+def task_line():
+    """Expression for a 'Select' action's `select` (no leading @) run over a Project Tasks GetItems body -
+    one bullet line per task: title, Status, Assigned To's display name (or 'Unassigned'), and a '(due ...)'
+    suffix when Due Date is set. Used to build TaskDetails (the full per-task list shown in the
+    project's own form footer) alongside the existing Task_x0020_Progress rollup count - see hd24()/hd25()."""
+    return ("concat('• ',coalesce(item()?['Title'],'(untitled task)'),' — ',"
+            "coalesce(item()?['Status']?['Value'],'Not Started'),' — ',"
+            "coalesce(item()?['Assigned_x0020_To']?['DisplayName'],'Unassigned'),"
+            "if(empty(coalesce(item()?['Due_x0020_Date'],'')),'',"
+            "concat(' (due ',formatDateTime(item()?['Due_x0020_Date'],'MMM d'),')')))")
 
 def notify_each(prefix, csv_expr, html, exclude=()):
     """1:1-message every non-empty, internal, non-excluded address in a `;`-joined email string
@@ -3123,11 +3139,13 @@ def hd24():
     it's due), and every project Owner plus the project's creator (who it's assigned to) - same "both the
     assignee and the project's own people" shape hd19()/hd20() use for Owner/ProjectSponsor on the project
     itself. Recomputes the parent project's Task Progress rollup ("X of Y tasks complete") across every task on
-    that project and patches it onto the IT Projects item - the project's own page shows only this rollup, never
-    the full task list (Martin's call: progress visibility without an embedded list to maintain; the assignee
-    still needs to stay on track day to day, which is what HD26's daily nudge is for, not a bigger one-time
-    ping here). Stamps LastNotifiedStatus/LastNotifiedAssignee on the new task so HD25 has a clean baseline to
-    compare against on the next edit."""
+    that project and patches it onto the IT Projects item, alongside TaskDetails - a bullet-per-task
+    plain-text list (title, Status, Assigned To, due date if set, built by task_line()/TaskLines) shown as
+    a normal field on the project item itself so it shows every task's status and assignee, not just the
+    rollup count (added 2026-10-29 - the original build deliberately showed only the rollup; Martin asked
+    for the full per-task detail too). The assignee still needs to stay on track day to day though, which is
+    what HD26's daily nudge is for, not a bigger one-time ping here. Stamps LastNotifiedStatus/LastNotifiedAssignee
+    on the new task so HD25 has a clean baseline to compare against on the next edit."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
@@ -3184,13 +3202,20 @@ def hd24():
             "runAfter": ra("Tell_owners", status=("Succeeded", "Failed"))}),
         ("Completed_tasks", {"type": "Query", "runAfter": ra("Get_project_tasks"),
             "inputs": {"from": "@body('Get_project_tasks')?['value']", "where": "@equals(item()?['Status']?['Value'],'Completed')"}}),
+        ("TaskLines", {"type": "Select", "runAfter": ra("Completed_tasks"), "inputs": {
+            "from": "@body('Get_project_tasks')?['value']", "select": "@" + task_line()}}),
         ("ProgressText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
             "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
-            "runAfter": ra("Completed_tasks")}),
-        ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Title": "@outputs('ProjectTitle')",
-            "item/Task_x0020_Progress": "@outputs('ProgressText')"}),
+            "runAfter": ra("TaskLines")}),
+        ("TaskDetailsText", {**compose(
+            "@if(equals(length(body('Get_project_tasks')?['value']),0),'',"
+            "join(body('TaskLines'),decodeUriComponent('%0A')))"),
             "runAfter": ra("ProgressText")}),
+        ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Title": "@outputs('ProjectTitle')",
+            "item/Task_x0020_Progress": "@outputs('ProgressText')",
+            "item/TaskDetails": "@outputs('TaskDetailsText')"}),
+            "runAfter": ra("TaskDetailsText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
             "item/LastNotifiedStatus": f"@{pt('Status/Value')}",
@@ -3222,8 +3247,10 @@ def hd25():
     assignee (confirmation) and every project Owner + the creator (who finished it, so they know); any other
     status change (e.g. back to In Progress) doesn't get its own notification - only completion and reassignment
     are noteworthy enough to interrupt anyone, and HD26's daily sweep already keeps an unfinished task visible.
-    Recomputes and patches the parent project's Task Progress rollup whenever Status changed (a reassignment
-    alone doesn't move the count). Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way.
+    Recomputes and patches the parent project's Task Progress rollup AND TaskDetails (the full per-task
+    list shown as a normal field on the project item itself - see hd24()'s docstring) whenever Status OR Assigned To changed,
+    since a bare reassignment doesn't move the rollup count but does change what TaskDetails should show
+    for that task. Restamps LastNotifiedStatus/LastNotifiedAssignee at the end either way.
     The trigger-level condition also requires LastNotifiedStatus to already be stamped (non-empty) before this
     flow runs at all - without that guard, a brand-new task's blank LastNotifiedStatus/LastNotifiedAssignee
     makes status_changed/assignee_changed look true on the very item-created event HD24 is already handling,
@@ -3305,15 +3332,22 @@ def hd25():
             "runAfter": ra("Completed_change", status=("Succeeded", "Failed", "Skipped"))}),
         ("Completed_tasks", {"type": "Query", "runAfter": ra("Get_project_tasks"),
             "inputs": {"from": "@body('Get_project_tasks')?['value']", "where": "@equals(item()?['Status']?['Value'],'Completed')"}}),
+        ("TaskLines", {"type": "Select", "runAfter": ra("Completed_tasks"), "inputs": {
+            "from": "@body('Get_project_tasks')?['value']", "select": "@" + task_line()}}),
         ("ProgressText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
             "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
-            "runAfter": ra("Completed_tasks")}),
-        ("Update_project_progress", {**cond(f"@{status_changed}",
+            "runAfter": ra("TaskLines")}),
+        ("TaskDetailsText", {**compose(
+            "@if(equals(length(body('Get_project_tasks')?['value']),0),'',"
+            "join(body('TaskLines'),decodeUriComponent('%0A')))"),
+            "runAfter": ra("ProgressText")}),
+        ("Update_project_progress", {**cond(f"@or({status_changed},{assignee_changed})",
             {"Patch_progress": spp("PatchItem", {"id": f"@{PID}",
                 "item/Title": "@coalesce(body('Get_project')?['Title'],'')",
-                "item/Task_x0020_Progress": "@outputs('ProgressText')"})}),
-            "runAfter": ra("ProgressText")}),
+                "item/Task_x0020_Progress": "@outputs('ProgressText')",
+                "item/TaskDetails": "@outputs('TaskDetailsText')"})}),
+            "runAfter": ra("TaskDetailsText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
             "item/LastNotifiedStatus": f"@{V}", "item/LastNotifiedAssignee": f"@{AsEmail}"}),
