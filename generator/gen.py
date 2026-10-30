@@ -10,6 +10,11 @@ TICKETS = "22c09b0b-bbcd-42a9-9aeb-844d81089636"
 PROJECTS = "3de1b401-4cac-4994-9c43-0d7cdd464b47"   # "IT Projects" list, added 2026-10-25
 PRJ_LIST_URL = SITE + "/Lists/IT%20Projects/Full%20Detail.aspx?FilterField1=ID&FilterValue1="   # tech view
 PRJ_ITEM_URL = SITE + "/Lists/IT%20Projects/DispForm.aspx?ID="   # read-only item page (also used by the sponsor for now)
+TASK_ITEM_URL = SITE + "/Lists/Project%20Tasks/DispForm.aspx?ID="   # read-only item page for a single Project Tasks row -
+# assignee-facing task emails link here (by the task's own ID, not ProjectID) so a tech can go straight from the
+# notification to the task item and change its Status, instead of landing on the read-only project rollup and then
+# having to find their row in the Project Tasks list themselves (closed 2026-10-30, alongside adding Project Tasks
+# to the site's top nav - see "Task email deep link" in docs/IT-Tech-Guide.md)
 PRJ_STATUSES = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Approval", "Completed", "Cancelled"]
 PRJ_ACTIVE = ["Not Started", "In Progress", "On Hold", "Waiting on Vendor/Approval"]   # not Completed/Cancelled
 PRJ_CATEGORIES = ["Infrastructure", "Security", "Software Rollout", "Network", "Hardware Refresh", "Process Improvement", "Other"]
@@ -3230,7 +3235,8 @@ def hd24():
             f"<p>You've been assigned a task on project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}</p>"
             f"<p>@{{coalesce({pt('Notes')},'')}}</p>"
-            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
             "runAfter": ra("ProjectTitle")}),
         ("Tell_assignee", {**cond(tell_cond("AssigneeEmail"),
             {"Assignee_new_task": scope_msg("Assignee_new_task_msg", "@outputs('AssigneeEmail')",
@@ -3342,7 +3348,8 @@ def hd25():
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>You've been assigned a task on project PRJ-@{{{PID}}}.</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
-            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
             "runAfter": ra("AssigneeEmail_ra")}),
         ("Tell_new_assignee", {**cond(tell_cond("AssigneeEmail_ra"),
             {"New_assignee_msg": scope_msg("New_assignee_msg_s", "@outputs('AssigneeEmail_ra')",
@@ -3455,7 +3462,8 @@ def hd26():
     overdue_body = (f"<p>PRJ-@{{{PID}}} task @{{{it('Title')}}} ({due_line_ov}) hasn't been completed"
                     f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
                     f"<p>Assigned to: @{{coalesce({it('Assigned_x0020_To')}?['DisplayName'],'Unassigned')}}</p>"
-                    f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>")
+                    f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
+                    f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>")
     loop_actions = seq([
         ("AssigneeEmail", compose(f"@toLower(coalesce({it('Assigned_x0020_To')}?['Email'],''))")),
         ("Get_task_project", {**spp("GetItem", {"id": f"@{PID}"}), "runAfter": ra("AssigneeEmail")}),
