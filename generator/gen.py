@@ -3520,10 +3520,20 @@ def hd25():
         ("Owner_emails_select_co", {**people_select("Owner_emails_select_co", "body('Get_project')?['Owner']", "Email")["Owner_emails_select_co"], "runAfter": ra("Owner_names_select_co")}),
         ("OwnerEmails_co", {**compose(f"@{join_emails('Owner_emails_select_co')}"), "runAfter": ra("Owner_emails_select_co")}),
         ("CreatorEmail_co", {**compose("@toLower(coalesce(body('Get_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails_co")}),
+        # Project sponsors get the completion notice too (added 2026-10-31, Martin: "task notifications need to
+        # go to the project sponsors and owners") - same ProjectSponsor select + legacy SponsorEmail fallback
+        # hd20()'s Sponsor_emails_select/SponsorEmails use, read off the Get_project body here since this flow's
+        # trigger item is the task, not the project. Only the completion branch - a sponsor doesn't need to hear
+        # about every task created/reassigned, HD24/reassignment stay Owner/creator-only.
+        ("Sponsor_emails_select_co", {**people_select("Sponsor_emails_select_co", "body('Get_project')?['ProjectSponsor']", "Email")["Sponsor_emails_select_co"], "runAfter": ra("CreatorEmail_co")}),
+        ("SponsorEmails_co", {**compose(f"@{join_emails('Sponsor_emails_select_co', "body('Get_project')?['SponsorEmail']")}"), "runAfter": ra("Sponsor_emails_select_co")}),
+        # Owners + sponsors as one ';' list (union() de-dupes someone who is both) - the single source for
+        # both the email To line (via Recipients_co) and the Teams fan-out (Tell_owners_done) below.
+        ("StakeholderEmails_co", {**compose("@join(union(split(outputs('OwnerEmails_co'),';'),split(outputs('SponsorEmails_co'),';')),';')"), "runAfter": ra("SponsorEmails_co")}),
         ("Recipients_co", {**compose(
             "@join(union(if(empty(outputs('CreatorEmail_co')),json('[]'),createArray(outputs('CreatorEmail_co'))),"
-            "union(createArray('" + ME + "'),split(outputs('OwnerEmails_co'),';'))),';')"),
-            "runAfter": ra("CreatorEmail_co")}),
+            "union(createArray('" + ME + "'),split(outputs('StakeholderEmails_co'),';'))),';')"),
+            "runAfter": ra("StakeholderEmails_co")}),
         ("Email_owners_done", {**mail("@outputs('Recipients_co')",
             f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
@@ -3539,7 +3549,7 @@ def hd25():
             {"Creator_task_done": scope_msg("Creator_task_done_msg", "@outputs('CreatorEmail_co')",
                 f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>")}),
             "runAfter": ra("Martin_task_done", status=("Succeeded", "Failed"))}),
-        ("Tell_owners_done", {**notify_each("Tell_owners_done", "outputs('OwnerEmails_co')",
+        ("Tell_owners_done", {**notify_each("Tell_owners_done", "outputs('StakeholderEmails_co')",
             f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>",
             exclude=["outputs('CreatorEmail_co')"])["Tell_owners_done"],
             "runAfter": ra("Tell_creator_done", status=("Succeeded", "Failed"))}),
