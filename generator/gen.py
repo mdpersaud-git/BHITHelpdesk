@@ -3542,7 +3542,18 @@ def hd27():
         uses, not from a connector login name.
       - Empty "Assign to": unchanged, the task is created with no assignee.
     A blank Assign-to box or a typo therefore either works or fails loudly with a chat message - never a task
-    silently assigned to a garbage, unresolved Claims string."""
+    silently assigned to a garbage, unresolved Claims string.
+
+    **Due date (added 2026-10-30).** A third input, "Due date (optional)", a `date_1` field with
+    `x-ms-content-hint: "DATE"` (SharePoint's connector shape for a manually-added Date/Time input on this
+    trigger - Text/Yes-No/File/Email/Number/Date are the only types this trigger's schema supports, per the
+    "Assign to" note above; this is the first Date one added in this codebase, so double check the Run-flow
+    panel actually renders a date picker, not a plain textbox, after import - same "touch and re-save in the
+    designer if the shape looks off" caution CLAUDE.md gives for this trigger's schema generally). Resolved
+    once up front (`DueDate`, `@null` when left blank) and passed into every creation branch the same way
+    `Assigned_x0020_To/Claims` is, so a task created from this button carries a due date HD24's email
+    (`due_line`) already knows how to show, instead of coming in with one unset until someone edits it later
+    in the list."""
     trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
         "operationId": "GetItemHybridTriggerSchema",
         "parameters": {"dataset": SITE, "table": PROJECTS},
@@ -3551,6 +3562,8 @@ def hd27():
                      "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
             "text_1": {"description": "Optional: name or email", "title": "Assign to (optional)", "type": "string",
                        "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
+            "date_1": {"description": "Optional: when this task is due", "title": "Due date (optional)",
+                       "type": "string", "format": "date-time", "x-ms-content-hint": "DATE", "x-ms-dynamically-added": True},
             "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
                        "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
         "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
@@ -3561,7 +3574,8 @@ def hd27():
             "item/Title": "@outputs('TaskTitle')",
             "item/ProjectID": "@outputs('ProjectId')",
             "item/Status/Value": PT_STATUSES[0],
-            "item/Assigned_x0020_To/Claims": claims_expr})
+            "item/Assigned_x0020_To/Claims": claims_expr,
+            "item/Due_x0020_Date": "@outputs('DueDate')"})
         if after:
             a["runAfter"] = after
         return a
@@ -3578,6 +3592,7 @@ def hd27():
         ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
         ("TaskTitle", compose("@trim(coalesce(triggerBody()?['text'],''))")),
         ("AssigneeText", compose("@trim(coalesce(triggerBody()?['text_1'],''))")),
+        ("DueDate", compose("@if(empty(trim(coalesce(triggerBody()?['date_1'],''))),null,triggerBody()?['date_1'])")),
         ("Resolve_assignee", cond("@not(empty(outputs('AssigneeText')))", {
             "Is_email": cond("@contains(outputs('AssigneeText'),'@')", seq([
                 ("Ensure_by_email", sp_http("POST", "_api/web/ensureuser",
