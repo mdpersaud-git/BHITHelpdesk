@@ -509,6 +509,33 @@ def if_internal(cond_expr, yes, no=None, after=None):
 def nowET(fmt):
     return f"convertTimeZone(utcNow(),'UTC','{TZ}','{fmt}')"
 
+# ---------- overdue escalation (added 2026-10-31, best-practice review finding "escalation by age") ----------
+# HD21 (stale projects) and HD26 (overdue tasks) re-nudge every day, unconditionally, for as long as the item
+# stays in their filter (by design - see each flow's own docstring) - but before this, a project/task 1 day
+# past its threshold and one 60 days past it produced byte-identical emails. These three helpers add a day
+# count and a two-tier urgency marker (14+ days, 30+ days) so the subject/body actually reflect how overdue
+# something is, without changing the underlying "re-nudge every run" behavior itself.
+def days_overdue_expr(date_expr):
+    """Whole days between `date_expr` (no leading @ - a SharePoint DateTime/DateOnly value already in the
+    past, e.g. a Due Date, Target Date, or Modified timestamp) and now. ticks() is in 100-nanosecond units;
+    864000000000 of them is exactly one day. int()'s truncation (not round()) means an item overdue by
+    23h59m reads as 0 days, not 1 - matches "overdue by N full days", not "N calendar days different"."""
+    return f"int(div(sub(ticks(utcNow()),ticks({date_expr})),864000000000))"
+
+def escalation_prefix_expr(days_expr):
+    """'[URGENT] '/'[OVERDUE] '/'' subject prefix from a days_overdue_expr() output (`days_expr`, no leading
+    @, e.g. outputs('OverdueDays')). The 30-day check must come first - if(14-day-check) would short-circuit
+    and a 45-day-old item would only ever match the milder branch."""
+    return f"if(greaterOrEquals({days_expr},30),'[URGENT] ',if(greaterOrEquals({days_expr},14),'[OVERDUE] ',''))"
+
+def escalation_line_expr(days_expr):
+    """A standalone '<p>...</p>' (or '' below 14 days) naming how overdue something is, same two tiers/order
+    as escalation_prefix_expr(), meant to be spliced into a notification body as one more '@{...}' token."""
+    return (f"if(greaterOrEquals({days_expr},30),"
+            f"concat('<p style=\"color:#b00;font-weight:700\">',string({days_expr}),' day(s) overdue.</p>'),"
+            f"if(greaterOrEquals({days_expr},14),"
+            f"concat('<p style=\"color:#b45309;font-weight:700\">',string({days_expr}),' day(s) overdue.</p>'),''))")
+
 SUPPORT_OPEN_H, SUPPORT_CLOSE_H = 7, 21
 def sla_start_ticks(created_expr):
     """Ticks (UTC) of when the response timer starts for a ticket: its creation time, moved to 7:00 the same day
@@ -2392,10 +2419,35 @@ EXPECTED_FLOWS = ["HD1 Email intake", "HD2 Form intake", "HD3 Ticket created", "
                   "HD23 Monthly report"]
 # IT Projects flows, checked separately from EXPECTED_FLOWS above - they get their own dashboard health bucket
 # (DASH_PROJHEALTH, "IT Project Systems") rather than folding into the aggregate "Flows" card/count.
-EXPECTED_PROJECT_FLOWS = ["HD19 Project created", "HD20 Project updated", "HD21 No-update check"]
+# Widened 2026-10-31 (best-practice review finding "HD24-27 not wired into the dashboard health check") - until
+# now only HD19/HD20/HD21 were checked here, so HD24/HD25/HD26/HD27 silently going off or missing never showed
+# up anywhere on the IT Project Systems panel, unlike every ticket-side flow. The first 3 entries keep using
+# the original Slot1-3 (label)/Share1-3 (health)/Slot4-6 (status text) numbering project_flow_fields() below
+# already had - untouched, so the 3 existing dashboard cards (project-health-view.json) don't need remapping -
+# the 4 new ones get their own fresh slot range (Slot12-15/Share12-15/Slot16-19) rather than continuing the
+# i+1/i+4 pattern past i=2, which would have walked straight into Slot10/Slot11 (the self_check "last problem"
+# stamp - see self_check()'s own docstring) at the 7th flow. See proj_slot() just below Update_project_health's
+# field-building loop.
+EXPECTED_PROJECT_FLOWS = ["HD19 Project created", "HD20 Project updated", "HD21 No-update check",
+                           "HD24 Project task created v2", "HD25 Project task updated v2",
+                           "HD26 Project task overdue check", "HD27 Add project task (from project)"]
 PROJECT_FLOW_LABELS = {"HD19 Project created": "New project emails (HD19)",
                         "HD20 Project updated": "Project update emails (HD20)",
-                        "HD21 No-update check": "Daily check-in (HD21)"}
+                        "HD21 No-update check": "Daily check-in (HD21)",
+                        "HD24 Project task created v2": "New task emails (HD24)",
+                        "HD25 Project task updated v2": "Task update emails (HD25)",
+                        "HD26 Project task overdue check": "Overdue task sweep (HD26)",
+                        "HD27 Add project task (from project)": "Add task button (HD27)"}
+def proj_slot(i):
+    """Dashboard-row Slot/Share numbers for the i-th entry (0-based) of EXPECTED_PROJECT_FLOWS, on DASH_PROJHEALTH.
+    Returns (label_slot, share_slot, status_slot). The first 3 flows keep their original 1-3/1-3/4-6 numbering;
+    everything from the 4th flow on uses a fresh 12-15/12-15/16-19 range instead of continuing past Slot6/Share3,
+    which would otherwise collide with Slot10/Slot11 (self_check's own stamp - see EXPECTED_PROJECT_FLOWS'
+    comment above) at the 7th flow."""
+    if i < 3:
+        return (i + 1, i + 1, i + 4)
+    j = i - 3
+    return (12 + j, 12 + j, 16 + j)
 PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support account)", "Probe_Teams": "Teams",
                 "Probe_Planner": "Planner", "Probe_Users": "Office 365 Users", "Probe_OneDrive": "OneDrive",
                 "Probe_Flows": "Power Automate Management"}
@@ -2475,6 +2527,9 @@ FLOW_DESCRIPTIONS = {
     "HD27 Add project task (from project)": "Runs from the 'Add task' button on the IT Projects ID column: "
         "collects a task title (and optional assignee email) in the Run-flow panel, then creates that row in "
         "Project Tasks with ProjectID already set to the clicked project - HD24 takes it from there.",
+    "HD28 Project digest report": "Runs weekly, Monday at 8am: emails Martin only a digest of every active "
+        "project (Status/Priority/Owner/Target Date/% Complete) and, under each one, a table of its own "
+        "Project Tasks (Title/Status/Assigned To/Due Date).",
 }
 
 def hd16():
@@ -2531,9 +2586,10 @@ def hd16():
     proj_counts = [f"sub(length(split(outputs('FlowStr'),'{name}=Started')),1)" for name in EXPECTED_PROJECT_FLOWS]
     proj_flow_fields = {}
     for i, (name, c) in enumerate(zip(EXPECTED_PROJECT_FLOWS, proj_counts)):
-        proj_flow_fields[f"item/Slot{i+1}"] = PROJECT_FLOW_LABELS[name]
-        proj_flow_fields[f"item/Share{i+1}"] = f"@if(not(outputs('FlowsOk')),-1,if(equals({c},1),0,100))"
-        proj_flow_fields[f"item/Slot{i+4}"] = (f"@if(not(outputs('FlowsOk')),'could not list flows',"
+        label_slot, share_slot, status_slot = proj_slot(i)
+        proj_flow_fields[f"item/Slot{label_slot}"] = PROJECT_FLOW_LABELS[name]
+        proj_flow_fields[f"item/Share{share_slot}"] = f"@if(not(outputs('FlowsOk')),-1,if(equals({c},1),0,100))"
+        proj_flow_fields[f"item/Slot{status_slot}"] = (f"@if(not(outputs('FlowsOk')),'could not list flows',"
             f"if(equals({c},1),'on',if(equals({c},0),'off or missing',concat(string({c}),' copies on'))))")
     proj_bad_terms = [f"if(and(outputs('FlowsOk'),not(equals({c},1))),1,0)" for c in proj_counts]
     proj_issue_count = proj_bad_terms[0]
@@ -3060,20 +3116,34 @@ def hd21():
     asking for a status update. Because the filter and the run cadence are both unconditional (no LastNotified*
     stamp the way HD20 has), a project that's gone stale gets re-nudged on every subsequent daily run too, not
     just once - it only stops once someone actually updates it (which bumps Modified back under 5 days old and
-    drops it out of the filter)."""
+    drops it out of the filter). The nudge's subject/body is escalated (see days_overdue_expr() et al, added
+    2026-10-31) past 14/30 days stale, same two tiers as the Target Date sweep below.
+
+    A second, independent sweep (added 2026-10-31, best-practice review finding "Target Date overdue check")
+    runs right after: every active project whose Target Date has actually passed gets its own nudge, separate
+    from the Modified-staleness one above - a project can be touched constantly (notes, status bumps) and
+    still blow past its own deadline, which the staleness filter alone would never catch (recently-Modified
+    projects fall out of that filter entirely). Same recipients (creator + Martin), same unconditional re-nudge
+    behavior, own escalation tiers off days-past-Target-Date rather than days-since-Modified. A project with
+    no Target Date set is simply never matched by this second filter - nothing to compare against."""
     it = lambda k: f"items('Apply_to_each')?['{k}']"
     ID = it('ID')
     status_expr = f"{it('Status')}?['Value']"
     lnk = f"<a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a>"
+    esc_tok = "@{" + escalation_line_expr("outputs('StaleDays')") + "}"
     body_html = (f"<p>PRJ-@{{{ID}}}: @{{{it('Title')}}} hasn't had a status change or a new note in over 5 days"
                  f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
-                 f"<p>Status: @{{{status_expr}}}</p><p>{lnk}</p>")
+                 f"<p>Status: @{{{status_expr}}}</p>"
+                 f"{esc_tok}<p>{lnk}</p>")
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
     loop_actions = seq([
         ("CreatorEmail", compose(f"@toLower(coalesce({it('Author')}?['Email'],''))")),
-        ("Email_creator", {**mail("@outputs('CreatorEmail')", f"[PRJ-@{{{ID}}}] Status update needed: @{{{it('Title')}}}", body_html),
-            "runAfter": ra("CreatorEmail")}),
+        ("StaleDays", {**compose("@" + days_overdue_expr(it('Modified'))), "runAfter": ra("CreatorEmail")}),
+        ("EscalationPrefix", {**compose("@" + escalation_prefix_expr("outputs('StaleDays')")), "runAfter": ra("StaleDays")}),
+        ("Email_creator", {**mail("@outputs('CreatorEmail')",
+            f"@{{outputs('EscalationPrefix')}}[PRJ-@{{{ID}}}] Status update needed: @{{{it('Title')}}}", body_html),
+            "runAfter": ra("EscalationPrefix")}),
         ("Tell_creator_no_update", {**cond(tell_cond("CreatorEmail"),
             {"Creator_no_update": scope_msg("Creator_no_update_msg", "@outputs('CreatorEmail')", body_html)}),
             "runAfter": ra("Email_creator", status=("Succeeded", "Failed"))}),
@@ -3081,11 +3151,40 @@ def hd21():
             "runAfter": ra("Tell_creator_no_update", status=("Succeeded", "Failed", "Skipped"))}),
     ])
     loop = {"type": "Foreach", "foreach": "@body('Get_stale_projects')?['value']", "actions": loop_actions}
+
+    it2 = lambda k: f"items('Apply_to_each_target')?['{k}']"
+    ID2 = it2('ID')
+    status_expr2 = f"{it2('Status')}?['Value']"
+    lnk2 = f"<a href=\"{PRJ_ITEM_URL}@{{{ID2}}}\">View this project</a>"
+    esc_tok2 = "@{" + escalation_line_expr("outputs('TargetOverdueDays')") + "}"
+    body_html2 = (f"<p>PRJ-@{{{ID2}}}: @{{{it2('Title')}}} has passed its Target Date "
+                  f"(@{{formatDateTime({it2('TargetDate')},'MMMM d, yyyy')}}).</p>"
+                  f"<p>Status: @{{{status_expr2}}}</p>"
+                  f"{esc_tok2}<p>{lnk2}</p>")
+    target_loop_actions = seq([
+        ("CreatorEmail_tg", compose(f"@toLower(coalesce({it2('Author')}?['Email'],''))")),
+        ("TargetOverdueDays", {**compose("@" + days_overdue_expr(it2('TargetDate'))), "runAfter": ra("CreatorEmail_tg")}),
+        ("EscalationPrefix_tg", {**compose("@" + escalation_prefix_expr("outputs('TargetOverdueDays')")), "runAfter": ra("TargetOverdueDays")}),
+        ("Email_creator_tg", {**mail("@outputs('CreatorEmail_tg')",
+            f"@{{outputs('EscalationPrefix_tg')}}[PRJ-@{{{ID2}}}] Target date passed: @{{{it2('Title')}}}", body_html2),
+            "runAfter": ra("EscalationPrefix_tg")}),
+        ("Tell_creator_target", {**cond(tell_cond("CreatorEmail_tg"),
+            {"Creator_target": scope_msg("Creator_target_msg", "@outputs('CreatorEmail_tg')", body_html2)}),
+            "runAfter": ra("Email_creator_tg", status=("Succeeded", "Failed"))}),
+        ("Tell_martin_target", {**scope_msg("Martin_target", ME, body_html2),
+            "runAfter": ra("Tell_creator_target", status=("Succeeded", "Failed", "Skipped"))}),
+    ])
+    target_loop = {"type": "Foreach", "foreach": "@body('Get_overdue_target_projects')?['value']", "actions": target_loop_actions}
+
     actions = seq([
         ("Get_stale_projects", spp("GetItems", {
             "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ") and Modified lt '@{addDays(utcNow(),-5)}'",
             "$top": 200})),
         ("Apply_to_each", loop),
+        ("Get_overdue_target_projects", {**spp("GetItems", {
+            "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ") and TargetDate ne null and TargetDate lt '@{utcNow()}'",
+            "$top": 200}), "runAfter": ra("Apply_to_each", status=("Succeeded", "Failed", "Skipped"))}),
+        ("Apply_to_each_target", {**target_loop, "runAfter": ra("Get_overdue_target_projects")}),
     ])
     daily_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Day", "interval": 1, "timeZone": TZ,
@@ -3314,7 +3413,13 @@ def hd24():
             "runAfter": ra("ProgressText")}),
         ("Update_project_progress", {**spp("PatchItem", {"id": f"@{PID}", "item/Title": "@outputs('ProjectTitle')",
             "item/Task_x0020_Progress": "@outputs('ProgressText')",
-            "item/TaskDetails": "@outputs('TaskDetailsText')"}),
+            "item/TaskDetails": "@outputs('TaskDetailsText')",
+            # % Complete (PercentComplete) auto-synced from the same completed/total counts Task_x0020_Progress
+            # already computes above, so it never drifts from the rollup (added 2026-10-31, best-practice
+            # review finding "PercentComplete never synced" - previously a manually-typed number with no
+            # relationship to the actual task data). 0 of 0 tasks reads as 0%, not a div-by-zero.
+            "item/PercentComplete": "@if(equals(length(body('Get_project_tasks')?['value']),0),0,"
+                "div(mul(length(body('Completed_tasks')),100),length(body('Get_project_tasks')?['value'])))"}),
             "runAfter": ra("TaskDetailsText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
@@ -3456,7 +3561,10 @@ def hd25():
             {"Patch_progress": spp("PatchItem", {"id": f"@{PID}",
                 "item/Title": "@coalesce(body('Get_project')?['Title'],'')",
                 "item/Task_x0020_Progress": "@outputs('ProgressText')",
-                "item/TaskDetails": "@outputs('TaskDetailsText')"})}),
+                "item/TaskDetails": "@outputs('TaskDetailsText')",
+                # same PercentComplete auto-sync as hd24()'s Update_project_progress - see that comment.
+                "item/PercentComplete": "@if(equals(length(body('Get_project_tasks')?['value']),0),0,"
+                    "div(mul(length(body('Completed_tasks')),100),length(body('Get_project_tasks')?['value'])))"})}),
             "runAfter": ra("TaskDetailsText")}),
         ("Update_task", {**spt("PatchItem", {
             "id": f"@{ID}", "item/Title": f"@{pt('Title')}",
@@ -3487,8 +3595,18 @@ def hd26():
     here is a task, not a project - unlike HD21's single-list sweep). Deliberately has no LastNotified stamp and
     no change-detection, same rationale as HD21: the filter and the daily cadence are both unconditional, so an
     overdue task gets re-nudged on every subsequent daily run too, not just once - it only stops once the task is
-    completed or its Due Date/Modified date moves it out of the filter. No self-check: like HD21/HD23, it's a
-    scheduled sweep, not a per-item flow."""
+    completed or its Due Date/Modified date moves it out of the filter.
+    Skips sending anything when the parent project itself is Completed or Cancelled (added 2026-10-31,
+    best-practice review finding "overdue tasks on a finished project keep nagging forever" - the task-level
+    filter above only looks at the task's own Status, so a task left "In Progress" on a project someone already
+    marked Completed/Cancelled got nagged daily anyway; the whole point of closing a project out should be that
+    it stops generating noise). The parent project's Status is already fetched via Get_task_project (needed
+    anyway for Owner/creator), so this just checks it before sending rather than adding another list call.
+    Escalates by age (OverdueDays/EscalationPrefix, added the same day - see days_overdue_expr() et al) off
+    whichever date made the task match the filter (Due Date if set, otherwise Modified), same two 14/30-day
+    tiers HD21 uses. Self-checks now too (dash_id=DASH_PROJHEALTH, added the same day, best-practice review
+    finding "HD26/HD27 have no self_check" - previously a per-task send failure here went completely
+    unnoticed, unlike every other per-item project flow)."""
     it = lambda k: f"items('Apply_to_each')?['{k}']"
     ID = it('ID')
     PID = it('ProjectID')
@@ -3496,15 +3614,15 @@ def hd26():
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
     due_line_ov = (f"@{{if(empty(coalesce({it('Due_x0020_Date')},'')),'no due date set',"
                    f"concat('due ',formatDateTime({it('Due_x0020_Date')},'MMMM d, yyyy')))}}")
+    esc_tok3 = "@{" + escalation_line_expr("outputs('OverdueDays')") + "}"
     overdue_body = (f"<p>PRJ-@{{{PID}}} task @{{{it('Title')}}} ({due_line_ov}) hasn't been completed"
                     f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
                     f"<p>Assigned to: @{{coalesce({it('Assigned_x0020_To')}?['DisplayName'],'Unassigned')}}</p>"
+                    f"{esc_tok3}"
                     f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
                     f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>")
-    loop_actions = seq([
-        ("AssigneeEmail", compose(f"@toLower(coalesce({it('Assigned_x0020_To')}?['Email'],''))")),
-        ("Get_task_project", {**spp("GetItem", {"id": f"@{PID}"}), "runAfter": ra("AssigneeEmail")}),
-        ("Owner_emails_select_t", {**people_select("Owner_emails_select_t", "body('Get_task_project')?['Owner']", "Email")["Owner_emails_select_t"], "runAfter": ra("Get_task_project")}),
+    send_actions = seq([
+        ("Owner_emails_select_t", people_select("Owner_emails_select_t", "body('Get_task_project')?['Owner']", "Email")["Owner_emails_select_t"]),
         ("OwnerEmails_t", {**compose(f"@{join_emails('Owner_emails_select_t')}"), "runAfter": ra("Owner_emails_select_t")}),
         ("CreatorEmail_t", {**compose("@toLower(coalesce(body('Get_task_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails_t")}),
         ("Recipients_t", {**compose(
@@ -3513,7 +3631,7 @@ def hd26():
             "union(createArray('" + ME + "'),split(outputs('OwnerEmails_t'),';')))),';')"),
             "runAfter": ra("CreatorEmail_t")}),
         ("Email_overdue", {**mail("@outputs('Recipients_t')",
-            f"[PRJ-@{{{PID}}}] Task overdue: @{{{it('Title')}}}", overdue_body),
+            f"@{{outputs('EscalationPrefix')}}[PRJ-@{{{PID}}}] Task overdue: @{{{it('Title')}}}", overdue_body),
             "runAfter": ra("Recipients_t")}),
         ("Martin_overdue", {**scope_msg("Martin_overdue_msg", ME, overdue_body),
             "runAfter": ra("Email_overdue", status=("Succeeded", "Failed"))}),
@@ -3527,6 +3645,17 @@ def hd26():
             exclude=["outputs('CreatorEmail_t')", "outputs('AssigneeEmail')"])["Tell_owners_overdue"],
             "runAfter": ra("Tell_creator_overdue", status=("Succeeded", "Failed"))}),
     ])
+    loop_actions = seq([
+        ("AssigneeEmail", compose(f"@toLower(coalesce({it('Assigned_x0020_To')}?['Email'],''))")),
+        ("Get_task_project", {**spp("GetItem", {"id": f"@{PID}"}), "runAfter": ra("AssigneeEmail")}),
+        ("OverdueDays", {**compose("@" + days_overdue_expr(
+            f"if(empty(coalesce({it('Due_x0020_Date')},'')),{it('Modified')},{it('Due_x0020_Date')})")),
+            "runAfter": ra("Get_task_project")}),
+        ("EscalationPrefix", {**compose("@" + escalation_prefix_expr("outputs('OverdueDays')")), "runAfter": ra("OverdueDays")}),
+        ("Project_active", {**cond(
+            "@not(contains(createArray('Completed','Cancelled'),coalesce(body('Get_task_project')?['Status']?['Value'],'')))",
+            send_actions), "runAfter": ra("EscalationPrefix")}),
+    ])
     loop = {"type": "Foreach", "foreach": "@body('Get_overdue_tasks')?['value']", "actions": loop_actions}
     due_filter = ("Status ne 'Completed' and ("
                   "(Due_x0020_Date ne null and Due_x0020_Date lt '@{utcNow()}') or "
@@ -3535,6 +3664,23 @@ def hd26():
         ("Get_overdue_tasks", spt("GetItems", {"$filter": due_filter, "$top": 500})),
         ("Apply_to_each", loop),
     ])
+    # First self_check on a Foreach-based sweep flow in this codebase (every other self_check call wraps a
+    # per-item trigger flow, never a loop) - result('Apply_to_each') is the documented, reliable way to get
+    # each iteration's top-level action statuses (unlike result('Scope'), which CLAUDE.md already warns is
+    # unreliable for anything nested one level deeper - that's what `leaf` below is for elsewhere). The `leaf`
+    # names here (Get_task_project/Email_overdue/Martin_overdue) sit inside this Foreach, which actions('X')
+    # from outside a loop is NOT guaranteed to resolve correctly for every iteration (only confirmed to work
+    # for actions outside any loop elsewhere in this file) - confirm on the first live run whether these three
+    # error messages actually populate, same "verify on first live run" caveat as HD16's Slot23 reauthentication
+    # card; if they come back empty/wrong, drop `leaf` here and rely on scoped=["Apply_to_each"] alone, which
+    # still flags the run as a problem (just without the specific nested error text).
+    actions.update(self_check("Health", ["Apply_to_each"],
+        f"[Help desk health] HD26 problem on overdue-task check",
+        "Today's overdue-task sweep ran, but these steps did not complete (last task processed shown):",
+        "concat('overdue-task sweep ',formatDateTime(utcNow(),'MMM d'))",
+        leaf=("Get_task_project", "Email_overdue", "Martin_overdue"),
+        after=ra("Apply_to_each", status=("Succeeded", "Failed")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     daily_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Day", "interval": 1, "timeZone": TZ,
         "schedule": {"hours": ["9"], "minutes": [15]}}}
@@ -3688,7 +3834,104 @@ def hd27():
             "Create_task_unassigned": make_create("@null"),
         })),
     ])
+    acts.update(self_check("Health", ["Resolve_assignee"],
+        "[Help desk health] HD27 problem adding a task",
+        "A task was added from the Add task button, but these steps did not complete:",
+        "concat('PRJ-',outputs('ProjectId'),' task \"',outputs('TaskTitle'),'\" (via Add task)')",
+        leaf=("Create_task_email", "Create_task_name", "Create_task_unassigned"),
+        after=ra("Resolve_assignee", status=("Succeeded", "Failed")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     return "HD27 Add project task (from project)", trig, acts
+
+def digest_task_row():
+    """Expression for a 'Select' action's `select` (no leading @) run over a Project Tasks GetItems body,
+    one <tr> per task for HD28's digest (Title/Status/Assigned To/Due Date) - plain table cells, not the
+    hyperlinked bullet task_line() builds for the TaskDetails rollup, since this is a one-off weekly email,
+    not a field techs re-open and click through from repeatedly."""
+    title = _html_esc("coalesce(item()?['Title'],'(untitled task)')")
+    assignee = _html_esc("coalesce(item()?['Assigned_x0020_To']?['DisplayName'],'Unassigned')")
+    due = "if(empty(coalesce(item()?['Due_x0020_Date'],'')),'—',formatDateTime(item()?['Due_x0020_Date'],'MMM d'))"
+    status = "coalesce(item()?['Status']?['Value'],'Not Started')"
+    td = "'</td><td style=\"padding:4px 10px;border-bottom:1px solid #e5e7eb;font-size:12px\">'"
+    return (f"concat('<tr><td style=\"padding:4px 10px;border-bottom:1px solid #e5e7eb;font-size:12px\">',{title},"
+            f"{td},{status},{td},{assignee},{td},{due},'</td></tr>')")
+
+# ---------- HD28 Project digest report ----------
+def hd28():
+    """Runs weekly, Monday at 8am (best-practice review finding "no digest/summary report for projects" -
+    HD15's Projects donuts (dashboard, DASH rows 11-13) are counts only and never list individual projects, and
+    HD23 is a ticket-only monthly rollup with zero project data in it anywhere - confirmed by reading both
+    before building this. No frequency was specified when this was requested, so weekly was picked as a
+    middle ground between HD23's monthly ticket cadence (too slow for anything resembling week-to-week project
+    tracking) and the daily sweeps (HD21/HD26) that already nudge about individual staleness/overdue items on
+    their own - change the Recurrence schedule below if Martin wants a different cadence.
+    Sent to Martin ONLY ('mpersaud@branthaven.com' / ME), per his explicit instruction when this was requested
+    ('only send to myself for now') - unlike every other project notification in this codebase (HD19/HD20/HD21/
+    HD24/HD25/HD26 all also copy the creator and/or project Owner(s)), this one has no other recipient branch
+    at all, by design, not as an oversight.
+    Lists every active (not Completed/Cancelled - same PRJ_ACTIVE every other project flow uses) project, each
+    as its own block: a PRJ-n/Title header with Status/Priority/Owner(s)/Target Date/% Complete (the last two
+    straight off the project item - % Complete is the same auto-synced field HD24/HD25 now patch, see that
+    finding), followed by a table of every one of that project's own Project Tasks (Title/Status/Assigned To/
+    Due Date) - the combination the finding specifically asked for ("the project as well as tasks associated
+    with it"), which nothing else in this codebase puts in one place. A project with zero tasks still gets its
+    header block, with a plain "No tasks yet." line instead of an empty table.
+    No self-check: like HD21/HD23, it's a scheduled sweep, not a per-item flow."""
+    pit = lambda k: f"items('Apply_to_each_project')?['{k}']"
+    PID = pit('ID')
+    project_header = (
+        f"concat('<div style=\"margin-top:18px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden\">',"
+        f"'<div style=\"background:#0f172a;color:#fff;padding:10px 14px;font-weight:700;font-size:13px\">PRJ-',"
+        f"string({PID}),': '," + _html_esc(f"coalesce({pit('Title')},'(untitled project)')") + ",'</div>',"
+        f"'<div style=\"padding:10px 14px;font-size:12.5px;color:#333\">',"
+        f"'<b>Status:</b> ',coalesce({pit('Status')}?['Value'],''),' &middot; <b>Priority:</b> ',"
+        f"coalesce({pit('Priority')}?['Value'],''),' &middot; <b>Owner:</b> ',outputs('OwnerNames_d'),"
+        f"' &middot; <b>Target Date:</b> ',if(empty(coalesce({pit('TargetDate')},'')),'Not set',"
+        f"formatDateTime({pit('TargetDate')},'MMM d, yyyy')),"
+        f"' &middot; <b>% Complete:</b> ',string(coalesce({pit('PercentComplete')},0)),'%','</div>')")
+    task_loop_actions = seq([
+        ("Owner_names_select_d", people_select("Owner_names_select_d", f"{pit('Owner')}", "DisplayName")["Owner_names_select_d"]),
+        ("OwnerNames_d", {**compose(f"@{join_names('Owner_names_select_d', 'Not yet assigned')}"), "runAfter": ra("Owner_names_select_d")}),
+        ("Get_digest_tasks", {**spt("GetItems", {"$filter": f"ProjectID eq @{{{PID}}}", "$top": 2000}), "runAfter": ra("OwnerNames_d")}),
+        ("DigestTaskLines", {"type": "Select", "runAfter": ra("Get_digest_tasks"), "inputs": {
+            "from": "@body('Get_digest_tasks')?['value']", "select": "@" + digest_task_row()}}),
+        ("TasksHtml", {**compose(
+            "@if(equals(length(body('Get_digest_tasks')?['value']),0),"
+            "'<div style=\"padding:0 14px 10px 14px;font-size:12px;color:#888\">No tasks yet.</div>',"
+            "concat('<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+            "<tr><td style=\"padding:4px 10px;font-size:10.5px;color:#64748b;text-transform:uppercase\">Task</td>"
+            "<td style=\"padding:4px 10px;font-size:10.5px;color:#64748b;text-transform:uppercase\">Status</td>"
+            "<td style=\"padding:4px 10px;font-size:10.5px;color:#64748b;text-transform:uppercase\">Assigned To</td>"
+            "<td style=\"padding:4px 10px;font-size:10.5px;color:#64748b;text-transform:uppercase\">Due</td></tr>',"
+            "join(body('DigestTaskLines'),''),'</table>'))"),
+            "runAfter": ra("DigestTaskLines")}),
+        ("Project_block", {**compose(f"@concat({project_header},outputs('TasksHtml'),'</div>')"), "runAfter": ra("TasksHtml")}),
+        ("Append_block", {**{"type": "AppendToArrayVariable", "inputs": {"name": "varBlocks", "value": "@outputs('Project_block')"}},
+            "runAfter": ra("Project_block")}),
+    ])
+    actions = seq([
+        ("Get_active_projects", spp("GetItems", {
+            "$filter": "(" + " or ".join(f"Status eq '{s}'" for s in PRJ_ACTIVE) + ")",
+            "$orderby": "TargetDate asc", "$top": 200})),
+        ("Init_varBlocks", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varBlocks", "type": "array", "value": []}]}},
+            "runAfter": ra("Get_active_projects")}),
+        ("Apply_to_each_project", {"type": "Foreach", "runAfter": ra("Init_varBlocks"),
+            "foreach": "@body('Get_active_projects')?['value']", "actions": task_loop_actions}),
+        ("DigestHtml", {**compose(
+            "@if(equals(length(variables('varBlocks')),0),'<p>No active projects right now.</p>',"
+            "join(variables('varBlocks'),''))"), "runAfter": ra("Apply_to_each_project")}),
+        ("Email_digest", {**mail(ME,
+            "IT Projects weekly digest - @{formatDateTime(utcNow(),'MMMM d, yyyy')}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            "<h2 style=\"margin:0 0 4px 0\">IT Projects weekly digest</h2>"
+            "<p style=\"color:#666;margin:0 0 10px 0\">Active projects and their tasks, as of "
+            "@{formatDateTime(utcNow(),'MMMM d, yyyy')}.</p>@{outputs('DigestHtml')}</div>"),
+            "runAfter": ra("DigestHtml")}),
+    ])
+    weekly_trig = {"type": "Recurrence", "recurrence": {
+        "frequency": "Week", "interval": 1, "timeZone": TZ,
+        "schedule": {"weekDays": ["Monday"], "hours": ["8"], "minutes": [0]}}}
+    return "HD28 Project digest report", {"Recurrence": weekly_trig}, actions
 
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
@@ -3749,7 +3992,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27(), hd28()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
