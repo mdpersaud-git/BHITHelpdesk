@@ -3587,10 +3587,10 @@ def hd27():
         "schema": {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {
             "text": {"description": "What the task is", "title": "Task title", "type": "string",
                      "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
-            "text_1": {"description": "Optional: name or email", "title": "Assign to (optional)", "type": "string",
-                       "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
             "date": {"description": "Optional: when this task is due", "title": "Due date (optional)",
                      "type": "string", "format": "date", "x-ms-content-hint": "DATE", "x-ms-dynamically-added": True},
+            "text_1": {"description": "Optional: name or email", "title": "Assign to (optional)", "type": "string",
+                       "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
             "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
                        "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
         "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
