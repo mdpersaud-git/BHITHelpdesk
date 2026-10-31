@@ -3559,7 +3559,24 @@ def hd27():
     this trigger's Date content-hint and gets dropped rather than rejected at import. Matches what CLAUDE.md
     says generally about this trigger ("the wrapped shape Power Automate's own designer canonicalizes it
     to") but here the mismatch was inside one field's shape, not the top-level `rows`/`entity` wrapping, and
-    import validation didn't catch it - only comparing against a designer-generated field did. Resolved once
+    import validation didn't catch it - only comparing against a designer-generated field did.
+
+    With the `"date"`/`"format": "date"` shape, the SharePoint Run-flow panel renders an actual native
+    calendar picker (confirmed live 2026-10-31, not just a textbox - the earlier assumption that this
+    trigger's Date-hinted inputs are always plain text was wrong; it only looked that way because the first
+    attempt's bad shape degraded to a generic text box). **Caution for future edits to this field**: when
+    testing this live by editing the trigger directly in the flow designer (delete the field via "..." >
+    Delete, re-add via "Add an input" > Date) and clicking Save, Power Automate silently renamed the
+    trigger action itself from `For_a_selected_item` to `manual` in the saved definition - breaking the
+    SharePoint column button, which calls the flow by that exact trigger name (`"trigger
+    'For_a_selected_item' could not be found"`). No working rename-the-trigger-back UI was found (the
+    node's title text looked editable - selectable/highlightable on click - but typing into it never
+    actually changed anything, confirmed repeatedly). The only fix was re-importing the gen.py-built package
+    over the existing flow, which restores the correct trigger name as a side effect of replacing the whole
+    trigger definition. So: prefer regenerating via `gen.py` and reimporting over hand-editing this
+    trigger's fields live in the designer; if a live edit is unavoidable, re-import the matching package
+    afterward regardless of whether the live edit "worked," to be sure the trigger name wasn't silently
+    changed. Resolved once
     up front (`DueDate`, `@null` when left blank) and passed into every creation branch the same way
     `Assigned_x0020_To/Claims` is, so a task created from this button carries a due date HD24's email
     (`due_line`) already knows how to show, instead of coming in with one unset until someone edits it later
