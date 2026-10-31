@@ -328,7 +328,14 @@ def self_check(prefix, scoped, subject, intro, ticket_ref, extra=None, after=Non
     a stale HD20 self-check failure on PRJ-3 (the already-fixed `select()` bug, see the troubleshooting table)
     showed up in the "Help desk health" (ticket) digest as "Notifications (HD3/HD4 self-checks)".
     Returns {name: action}; the first action takes `after`."""
-    src = "union(" + ",".join(f"result('{s}')" for s in scoped) + ")"
+    # union() errors ("expects... a comma separated list... invoked with '1' parameter(s)") when given only one
+    # argument, so a single-entry `scoped` list (e.g. HD26/HD27, each wrapping just one Foreach/If) can't be
+    # wrapped in union() the way two-or-more-entry lists are - build the N=1 case as a bare result('X') instead,
+    # same expression union() would have reduced to anyway. Found 2026-10-31 via the HD26/HD27 live full-circle
+    # test: InvalidTemplate on every run of both flows' Health_problems action, confirmed against the
+    # EXPECTED_FLOWS/EXPECTED_PROJECT_FLOWS self_check calls that all use 2+ entries and never hit this.
+    result_terms = [f"result('{s}')" for s in scoped]
+    src = result_terms[0] if len(result_terms) == 1 else "union(" + ",".join(result_terms) + ")"
     if extra:
         src = f"union({src},{extra})"
     # result() only sees the top level of a scope; named leaf actions (an email inside an If inside a Scope) are
