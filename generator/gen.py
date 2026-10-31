@@ -3544,13 +3544,23 @@ def hd27():
     A blank Assign-to box or a typo therefore either works or fails loudly with a chat message - never a task
     silently assigned to a garbage, unresolved Claims string.
 
-    **Due date (added 2026-10-30).** A third input, "Due date (optional)", a `date_1` field with
-    `x-ms-content-hint: "DATE"` (SharePoint's connector shape for a manually-added Date/Time input on this
-    trigger - Text/Yes-No/File/Email/Number/Date are the only types this trigger's schema supports, per the
-    "Assign to" note above; this is the first Date one added in this codebase, so double check the Run-flow
-    panel actually renders a date picker, not a plain textbox, after import - same "touch and re-save in the
-    designer if the shape looks off" caution CLAUDE.md gives for this trigger's schema generally). Resolved
-    once up front (`DueDate`, `@null` when left blank) and passed into every creation branch the same way
+    **Due date (added 2026-10-30, fixed 2026-10-31).** A third input, "Due date (optional)", a `date` field
+    with `x-ms-content-hint: "DATE"` (SharePoint's connector shape for a manually-added Date/Time input on
+    this trigger - Text/Yes-No/File/Email/Number/Date are the only types this trigger's schema supports, per
+    the "Assign to" note above). First shipped as `"date_1"` with `"format": "date-time"`, by analogy with
+    `text`/`text_1`'s naming and with this list's own `Due_x0020_Date` column format - that shape imports
+    without error but the property is silently stripped from the live trigger schema (confirmed via Code
+    view: `date_1` absent entirely, not just mis-typed), so the Run-flow panel shows only Task title/Assign
+    to, no due-date field at all. Root-caused live by clicking the designer's own "Add an input" > Date on
+    this trigger and reading back what it generates: the key for a *first* manually-added Date field is
+    `"date"` (not `"date_1"` - the `_1` suffix only applies within one hint-type's own counter, and `text`
+    already owns position 0 among Text fields, but Date starts its own counter at 0), and critically the
+    format is `"format": "date"`, not `"date-time"` - `"date-time"` is apparently not a recognized shape for
+    this trigger's Date content-hint and gets dropped rather than rejected at import. Matches what CLAUDE.md
+    says generally about this trigger ("the wrapped shape Power Automate's own designer canonicalizes it
+    to") but here the mismatch was inside one field's shape, not the top-level `rows`/`entity` wrapping, and
+    import validation didn't catch it - only comparing against a designer-generated field did. Resolved once
+    up front (`DueDate`, `@null` when left blank) and passed into every creation branch the same way
     `Assigned_x0020_To/Claims` is, so a task created from this button carries a due date HD24's email
     (`due_line`) already knows how to show, instead of coming in with one unset until someone edits it later
     in the list."""
@@ -3562,8 +3572,8 @@ def hd27():
                      "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
             "text_1": {"description": "Optional: name or email", "title": "Assign to (optional)", "type": "string",
                        "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
-            "date_1": {"description": "Optional: when this task is due", "title": "Due date (optional)",
-                       "type": "string", "format": "date-time", "x-ms-content-hint": "DATE", "x-ms-dynamically-added": True},
+            "date": {"description": "Optional: when this task is due", "title": "Due date (optional)",
+                     "type": "string", "format": "date", "x-ms-content-hint": "DATE", "x-ms-dynamically-added": True},
             "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
                        "type": "object", "required": []}}, "required": ["text"]}}}, "required": ["rows"]},
         "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
@@ -3592,7 +3602,7 @@ def hd27():
         ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
         ("TaskTitle", compose("@trim(coalesce(triggerBody()?['text'],''))")),
         ("AssigneeText", compose("@trim(coalesce(triggerBody()?['text_1'],''))")),
-        ("DueDate", compose("@if(empty(trim(coalesce(triggerBody()?['date_1'],''))),null,triggerBody()?['date_1'])")),
+        ("DueDate", compose("@if(empty(trim(coalesce(triggerBody()?['date'],''))),null,triggerBody()?['date'])")),
         ("Resolve_assignee", cond("@not(empty(outputs('AssigneeText')))", {
             "Is_email": cond("@contains(outputs('AssigneeText'),'@')", seq([
                 ("Ensure_by_email", sp_http("POST", "_api/web/ensureuser",
