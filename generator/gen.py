@@ -3506,11 +3506,15 @@ def hd25():
     ])
 
     completion_branch = seq([
-        ("AssigneeEmail_co", compose(f"@{AsEmail}")),
+        # The task's Notes (whatever the assignee typed while completing it) go out with every completion
+        # message (added 2026-10-31, Martin asked) - before this, Notes only ever reached anyone via HD24's
+        # creation email and the project's TaskDetails rollup. Empty Notes -> empty line, no "NOTES:" label.
+        ("NoteLine_co", compose(f"@if(empty(coalesce({pt('Notes')},'')),'',concat('<p><b>NOTES:</b> ',replace({pt('Notes')},decodeUriComponent('%0A'),'<br>'),'</p>'))")),
+        ("AssigneeEmail_co", {**compose(f"@{AsEmail}"), "runAfter": ra("NoteLine_co")}),
         ("Email_assignee_done", {**mail("@outputs('AssigneeEmail_co')",
             f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
-            f"<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p></div>"),
+            f"<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p>@{{outputs('NoteLine_co')}}</div>"),
             "runAfter": ra("AssigneeEmail_co")}),
         ("Tell_assignee_done", {**cond(tell_cond("AssigneeEmail_co"),
             {"Assignee_done_msg": scope_msg("Assignee_done_msg_s", "@outputs('AssigneeEmail_co')",
@@ -3538,19 +3542,19 @@ def hd25():
             f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>@{{{AsName}}} completed a task on project PRJ-@{{{PID}}}: @{{coalesce(body('Get_project')?['Title'],'')}}</p>"
-            f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
+            f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>@{{outputs('NoteLine_co')}}"
             f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">View this task</a> &middot; "
             f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
             "runAfter": ra("Recipients_co")}),
         ("Martin_task_done", {**scope_msg("Martin_task_done_msg", ME,
-            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>"),
+            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>@{{outputs('NoteLine_co')}}"),
             "runAfter": ra("Email_owners_done", status=("Succeeded", "Failed"))}),
         ("Tell_creator_done", {**cond(tell_cond("CreatorEmail_co"),
             {"Creator_task_done": scope_msg("Creator_task_done_msg", "@outputs('CreatorEmail_co')",
-                f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>")}),
+                f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>@{{outputs('NoteLine_co')}}")}),
             "runAfter": ra("Martin_task_done", status=("Succeeded", "Failed"))}),
         ("Tell_owners_done", {**notify_each("Tell_owners_done", "outputs('StakeholderEmails_co')",
-            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>",
+            f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>@{{outputs('NoteLine_co')}}",
             exclude=["outputs('CreatorEmail_co')"])["Tell_owners_done"],
             "runAfter": ra("Tell_creator_done", status=("Succeeded", "Failed"))}),
     ])
