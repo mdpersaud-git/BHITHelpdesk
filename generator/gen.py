@@ -3214,7 +3214,13 @@ def hd24():
     Email_owners (the owners/creator/Martin copy) links to both the task AND the project (added 2026-10-31,
     Martin noticed the owners' copy only had a project link while the assignee's own email already had both -
     an owner who IS also the assignee, e.g. a working owner on a small project, was landing on the owners' email
-    with no quick way to the task itself)."""
+    with no quick way to the task itself).
+    Shipping that one-line fix took three reimports to actually land (2026-10-31) - device_commit_files reported
+    success while silently writing the OLD zip bytes to Martin's Downloads folder, twice in a row; only caught
+    by re-staging the file back from the device and diffing it against the just-built zip (different checksum,
+    different size, old text). See docs/IT-Tech-Guide.md's "Owners/creator/Martin copy also got the task link"
+    section for the full story - the lesson is to always re-stage+diff a pushed file before telling Martin to
+    reimport, never trust the push call's own success result."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
