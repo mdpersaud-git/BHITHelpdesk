@@ -3210,7 +3210,11 @@ def hd24():
     what HD26's daily nudge is for, not a bigger one-time ping here. Stamps LastNotifiedStatus/LastNotifiedAssignee/
     LastNotifiedNotes on the new task so HD25 has a clean baseline to compare against on the next edit - the
     LastNotifiedNotes baseline (added 2026-10-30) is what lets HD25 refresh TaskDetails on a Notes-only edit too,
-    not just a Status/Assigned-To change (see hd25()'s docstring)."""
+    not just a Status/Assigned-To change (see hd25()'s docstring).
+    Email_owners (the owners/creator/Martin copy) links to both the task AND the project (added 2026-10-31,
+    Martin noticed the owners' copy only had a project link while the assignee's own email already had both -
+    an owner who IS also the assignee, e.g. a working owner on a small project, was landing on the owners' email
+    with no quick way to the task itself)."""
     pt = lambda k: f"triggerOutputs()?['body/{k}']"
     ID = pt('ID')
     PID = pt('ProjectID')
@@ -3251,7 +3255,8 @@ def hd24():
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>A new task was added to project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}<br><b>ASSIGNED TO:</b> @{{{AsName}}}</p>"
-            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">View this task</a> &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
             "runAfter": ra("Recipients")}),
         ("Martin_new_task", {**scope_msg("Martin_new_task_msg", ME,
             f"<p><b>New task on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>Assigned to: @{{{AsName}}}</p>"),
@@ -3316,6 +3321,8 @@ def hd25():
     are noteworthy enough to interrupt anyone, and HD26's daily sweep already keeps an unfinished task visible.
     A Notes-only edit never gets a notification of its own either - it's not urgent enough to interrupt anyone,
     same reasoning as a bare status bounce.
+    Email_owners_done (the completion copy to owners/creator/Martin) links to both the task AND the project,
+    same 2026-10-31 fix as hd24()'s Email_owners - see that docstring.
     Recomputes and patches the parent project's Task Progress rollup AND TaskDetails (the full per-task
     list shown as a normal field on the project item itself - see hd24()'s docstring) whenever Status, Assigned To,
     OR Notes changed (widened 2026-10-30 to include Notes - task_line() now folds Notes into the TaskDetails
@@ -3381,7 +3388,8 @@ def hd25():
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>@{{{AsName}}} completed a task on project PRJ-@{{{PID}}}: @{{coalesce(body('Get_project')?['Title'],'')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
-            f"<p><a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">View this task</a> &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
             "runAfter": ra("Recipients_co")}),
         ("Martin_task_done", {**scope_msg("Martin_task_done_msg", ME,
             f"<p><b>Task completed on PRJ-@{{{PID}}}: @{{{pt('Title')}}}</b></p><p>By: @{{{AsName}}}</p>"),
