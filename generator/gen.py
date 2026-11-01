@@ -3730,7 +3730,10 @@ def hd26():
                 ("Email_due_soon", mail("@outputs('AssigneeEmail_s')",
                     f"[PRJ-@{{{PID_s}}}] Task due @{{{when_txt}}}: @{{{its('Title')}}}",
                     "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">" + due_soon_body + "</div>")),
-                ("Tell_assignee_due_soon", {**cond(tell_cond("AssigneeEmail_s"),
+                # Not tell_cond(): that helper skips ME because the other paths send Martin his own copy;
+                # here there is no separate Martin copy, so the assignee gets the Teams note whoever they
+                # are (found 2026-11-01 live: Martin-as-assignee got the email but the chat was Skipped).
+                ("Tell_assignee_due_soon", {**cond("@and(not(empty(outputs('AssigneeEmail_s')))," + is_internal("outputs('AssigneeEmail_s')") + ")",
                     {"Assignee_due_soon": scope_msg("Assignee_due_soon_msg", "@outputs('AssigneeEmail_s')", due_soon_body)}),
                     "runAfter": ra("Email_due_soon", status=("Succeeded", "Failed"))}),
             ])), "runAfter": ra("DaysUntil")}),
