@@ -4033,6 +4033,10 @@ def hd28():
     his request). Owners are collected while the project loop runs (Owner_emails_select_d -> varOwnerCsv), then
     de-duplicated with union() and emptied of blanks (Digest_recipients Query) before the single send - every
     owner gets the whole digest, not just their own projects, since the point is the team-wide picture.
+    Sponsor edition (added 2026-11-01): after the team digest, one more email per distinct Project Sponsor
+    across the active projects ("Your IT projects this week"), containing only the project blocks that
+    sponsor is on, with the information-only banner - the first scheduled thing a sponsor has ever received;
+    everything else they get is event-driven (HD19 creation, HD20 status/sponsor-update, HD25 task completed).
     Lists every active (not Completed/Cancelled - same PRJ_ACTIVE every other project flow uses) project, each
     as its own block: a PRJ-n/Title header with Status/Priority/Owner(s)/Target Date/% Complete (the last two
     straight off the project item - % Complete is the same auto-synced field HD24/HD25 now patch, see that
@@ -4075,6 +4079,32 @@ def hd28():
         ("Project_block", {**compose(f"@concat({project_header},outputs('TasksHtml'),'</div>')"), "runAfter": ra("TasksHtml")}),
         ("Append_block", {**{"type": "AppendToArrayVariable", "inputs": {"name": "varBlocks", "value": "@outputs('Project_block')"}},
             "runAfter": ra("Project_block")}),
+        # Sponsor edition (added 2026-11-01): remember which sponsors this project has, and keep the block
+        # tagged with them, so the per-sponsor loop below can send each sponsor only their own projects.
+        ("Sponsor_emails_select_d", {**people_select("Sponsor_emails_select_d", f"{pit('ProjectSponsor')}", "Email")["Sponsor_emails_select_d"], "runAfter": ra("Append_block")}),
+        ("SponsorEmails_d", {**compose(f"@{join_emails('Sponsor_emails_select_d', pit('SponsorEmail'))}"), "runAfter": ra("Sponsor_emails_select_d")}),
+        ("Collect_sponsor_emails", {**{"type": "AppendToStringVariable", "inputs": {"name": "varSponsorCsv",
+            "value": "@concat(outputs('SponsorEmails_d'),';')"}}, "runAfter": ra("SponsorEmails_d")}),
+        ("Append_sponsor_block", {**{"type": "AppendToArrayVariable", "inputs": {"name": "varSponsorBlocks",
+            "value": {"sponsors": "@outputs('SponsorEmails_d')", "block": "@outputs('Project_block')"}}},
+            "runAfter": ra("Collect_sponsor_emails")}),
+    ])
+    # One email per sponsor, containing only the projects they sponsor (Martin: "when does the sponsor get an
+    # update on a project including tasks" - until now only event-driven pings; this is the weekly picture).
+    SP = "items('Apply_to_each_sponsor')"
+    sponsor_loop_actions = seq([
+        ("My_blocks", {"type": "Query", "runAfter": {}, "inputs": {"from": "@variables('varSponsorBlocks')",
+            "where": f"@contains(concat(';',item()?['sponsors'],';'),concat(';',{SP},';'))"}}),
+        ("My_block_html", {"type": "Select", "runAfter": ra("My_blocks"), "inputs": {"from": "@body('My_blocks')", "select": "@item()?['block']"}}),
+        ("Email_sponsor_digest", {**mail(f"@{SP}",
+            "Your IT projects this week - @{formatDateTime(utcNow(),'MMMM d, yyyy')}",
+            "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
+            + COMPLETE_BANNER_EMAIL +
+            "<h2 style=\"margin:0 0 4px 0\">Your IT projects this week</h2>"
+            "<p style=\"color:#666;margin:0 0 10px 0\">Status, progress and tasks for the projects you sponsor, as of "
+            "@{formatDateTime(utcNow(),'MMMM d, yyyy')}. Questions or an update for IT? Reply to any project email with the PRJ number in it.</p>"
+            "@{join(body('My_block_html'),'')}</div>"),
+            "runAfter": ra("My_block_html")}),
     ])
     actions = seq([
         ("Get_active_projects", spp("GetItems", {
@@ -4084,7 +4114,11 @@ def hd28():
             "runAfter": ra("Get_active_projects")}),
         ("Init_varOwnerCsv", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varOwnerCsv", "type": "string", "value": ""}]}},
             "runAfter": ra("Init_varBlocks")}),
-        ("Apply_to_each_project", {"type": "Foreach", "runAfter": ra("Init_varOwnerCsv"),
+        ("Init_varSponsorCsv", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varSponsorCsv", "type": "string", "value": ""}]}},
+            "runAfter": ra("Init_varOwnerCsv")}),
+        ("Init_varSponsorBlocks", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varSponsorBlocks", "type": "array", "value": []}]}},
+            "runAfter": ra("Init_varSponsorCsv")}),
+        ("Apply_to_each_project", {"type": "Foreach", "runAfter": ra("Init_varSponsorBlocks"),
             "foreach": "@body('Get_active_projects')?['value']", "actions": task_loop_actions}),
         ("DigestHtml", {**compose(
             "@if(equals(length(variables('varBlocks')),0),'<p>No active projects right now.</p>',"
@@ -4100,6 +4134,13 @@ def hd28():
             "<p style=\"color:#666;margin:0 0 10px 0\">Active projects and their tasks, as of "
             "@{formatDateTime(utcNow(),'MMMM d, yyyy')}.</p>@{outputs('DigestHtml')}</div>"),
             "runAfter": ra("Digest_recipients")}),
+        # union() with an empty array de-duplicates the sponsor list (union needs 2+ args - see self_check note);
+        # the Query drops the blank from the trailing ';' and any project with no sponsor at all.
+        ("Unique_sponsors", {"type": "Query", "runAfter": ra("Email_digest", status=("Succeeded", "Failed")),
+            "inputs": {"from": "@union(split(variables('varSponsorCsv'),';'),json('[]'))",
+                       "where": "@not(empty(trim(item())))"}}),
+        ("Apply_to_each_sponsor", {"type": "Foreach", "runAfter": ra("Unique_sponsors"),
+            "foreach": "@body('Unique_sponsors')", "actions": sponsor_loop_actions}),
     ])
     weekly_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Week", "interval": 1, "timeZone": TZ,
