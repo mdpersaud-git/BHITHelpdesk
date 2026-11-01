@@ -971,7 +971,12 @@ def hd3():
             ("Send_confirmation_email", mail("@outputs('ReqEmail')",
                 f"[IT-@{{{ID}}}] We've got your request: @{{{t('Title')}}}",
                 CONFIRM_BODY.replace("§ID§", ID).replace("§T§", "triggerOutputs()?['body/"))),
-            ("Confirm_in_Teams_if_internal", {**if_internal("outputs('IsInternal')", {
+            # skip the 1:1 chat when the requester IS the IT Support account itself (e.g. IT Support submits a
+            # ticket for itself with no on-behalf picked): CreateChat 400s "Duplicate chat members" because the
+            # Teams connection's own identity (shared_teams_1 = IT_Support@branthaven.com) is already one member
+            # of the chat it's trying to open with itself - same root cause as HD29's clicker_ok guard.
+            ("Confirm_in_Teams_if_internal", {**if_internal(
+                f"and(outputs('IsInternal'),not(equals(outputs('ReqEmail'),toLower('{SUPPORT}'))))", {
                 "Confirm_in_Teams": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Send_confirmation_chat", "@outputs('ReqEmail')",
                         f"<p><b>IT-@{{{ID}}} created:</b> @{{{t('Title')}}}</p>"
@@ -1029,7 +1034,12 @@ def hd3():
     actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
         f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",
-        f"concat('IT-',{ID},' (created)')", extra=no_channel, leaf=("Send_confirmation_email", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
+        f"concat('IT-',{ID},' (created)')", extra=no_channel,
+        # Send_confirmation_chat_open_chat is checked alongside Send_confirmation_chat: a CreateChat failure
+        # (e.g. the BadRequest "Duplicate chat members" case guarded against above) leaves the open_chat step
+        # Failed but the PostMessage step that follows it Skipped - and Skipped reads as OK to this self-check's
+        # problem filter, so without the open_chat leaf named here that class of failure went unreported.
+        leaf=("Send_confirmation_email", "Send_confirmation_chat_open_chat", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
