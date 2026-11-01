@@ -3706,7 +3706,11 @@ def hd26():
     its = lambda k: f"items('Apply_to_each_due_soon')?['{k}']"
     PID_s, ID_s = its('ProjectID'), its('ID')
     ET = "'Eastern Standard Time'"
-    days_until = (f"div(sub(ticks(startOfDay(convertFromUtc({its('Due_x0020_Date')},{ET}))),"
+    # Due Date comes back from the SharePoint connector as a bare local midnight with no 'Z'
+    # ('2026-11-03T00:00:00.0000000') - a calendar date, not a UTC instant - so it must NOT go through
+    # convertFromUtc (which throws "expects its first parameter to be a string that contains a UTC date
+    # time"; caught on the first live run 2026-11-01). Only "now" is converted to Eastern.
+    days_until = (f"div(sub(ticks(startOfDay({its('Due_x0020_Date')})),"
                   f"ticks(startOfDay(convertFromUtc(utcNow(),{ET})))),864000000000)")
     when_txt = "if(equals(outputs('DaysUntil'),1),'tomorrow','in 2 days')"
     due_soon_body = (f"<p>Heads-up: PRJ-@{{{PID_s}}} task <b>@{{{its('Title')}}}</b> is due @{{{when_txt}}}"
