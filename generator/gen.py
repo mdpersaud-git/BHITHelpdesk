@@ -3984,10 +3984,11 @@ def hd28():
     middle ground between HD23's monthly ticket cadence (too slow for anything resembling week-to-week project
     tracking) and the daily sweeps (HD21/HD26) that already nudge about individual staleness/overdue items on
     their own - change the Recurrence schedule below if Martin wants a different cadence.
-    Sent to Martin ONLY ('mpersaud@branthaven.com' / ME), per his explicit instruction when this was requested
-    ('only send to myself for now') - unlike every other project notification in this codebase (HD19/HD20/HD21/
-    HD24/HD25/HD26 all also copy the creator and/or project Owner(s)), this one has no other recipient branch
-    at all, by design, not as an oversight.
+    Sent to Martin plus every project Owner (IT Team Lead) across the active projects (widened 2026-11-01 -
+    Martin: "send the report to IT Team Owner and myself"; the first cut on 2026-10-31 went to Martin only at
+    his request). Owners are collected while the project loop runs (Owner_emails_select_d -> varOwnerCsv), then
+    de-duplicated with union() and emptied of blanks (Digest_recipients Query) before the single send - every
+    owner gets the whole digest, not just their own projects, since the point is the team-wide picture.
     Lists every active (not Completed/Cancelled - same PRJ_ACTIVE every other project flow uses) project, each
     as its own block: a PRJ-n/Title header with Status/Priority/Owner(s)/Target Date/% Complete (the last two
     straight off the project item - % Complete is the same auto-synced field HD24/HD25 now patch, see that
@@ -4011,7 +4012,10 @@ def hd28():
     task_loop_actions = seq([
         ("Owner_names_select_d", people_select("Owner_names_select_d", f"{pit('Owner')}", "DisplayName")["Owner_names_select_d"]),
         ("OwnerNames_d", {**compose(f"@{join_names('Owner_names_select_d', 'Not yet assigned')}"), "runAfter": ra("Owner_names_select_d")}),
-        ("Get_digest_tasks", {**spt("GetItems", {"$filter": f"ProjectID eq @{{{PID}}}", "$top": 2000}), "runAfter": ra("OwnerNames_d")}),
+        ("Owner_emails_select_d", {**people_select("Owner_emails_select_d", f"{pit('Owner')}", "Email")["Owner_emails_select_d"], "runAfter": ra("OwnerNames_d")}),
+        ("Collect_owner_emails", {**{"type": "AppendToStringVariable", "inputs": {"name": "varOwnerCsv",
+            "value": f"@concat({join_emails('Owner_emails_select_d')},';')"}}, "runAfter": ra("Owner_emails_select_d")}),
+        ("Get_digest_tasks", {**spt("GetItems", {"$filter": f"ProjectID eq @{{{PID}}}", "$top": 2000}), "runAfter": ra("Collect_owner_emails")}),
         ("DigestTaskLines", {"type": "Select", "runAfter": ra("Get_digest_tasks"), "inputs": {
             "from": "@body('Get_digest_tasks')?['value']", "select": "@" + digest_task_row()}}),
         ("TasksHtml", {**compose(
@@ -4034,18 +4038,24 @@ def hd28():
             "$orderby": "TargetDate asc", "$top": 200})),
         ("Init_varBlocks", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varBlocks", "type": "array", "value": []}]}},
             "runAfter": ra("Get_active_projects")}),
-        ("Apply_to_each_project", {"type": "Foreach", "runAfter": ra("Init_varBlocks"),
+        ("Init_varOwnerCsv", {**{"type": "InitializeVariable", "inputs": {"variables": [{"name": "varOwnerCsv", "type": "string", "value": ""}]}},
+            "runAfter": ra("Init_varBlocks")}),
+        ("Apply_to_each_project", {"type": "Foreach", "runAfter": ra("Init_varOwnerCsv"),
             "foreach": "@body('Get_active_projects')?['value']", "actions": task_loop_actions}),
         ("DigestHtml", {**compose(
             "@if(equals(length(variables('varBlocks')),0),'<p>No active projects right now.</p>',"
             "join(variables('varBlocks'),''))"), "runAfter": ra("Apply_to_each_project")}),
-        ("Email_digest", {**mail(ME,
+        # Martin + every owner, de-duplicated, blanks (trailing ';' / unassigned Owner) dropped.
+        ("Digest_recipients", {"type": "Query", "runAfter": ra("DigestHtml"),
+            "inputs": {"from": "@union(createArray('" + ME + "'),split(variables('varOwnerCsv'),';'))",
+                       "where": "@not(empty(trim(item())))"}}),
+        ("Email_digest", {**mail("@join(body('Digest_recipients'),';')",
             "IT Projects weekly digest - @{formatDateTime(utcNow(),'MMMM d, yyyy')}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             "<h2 style=\"margin:0 0 4px 0\">IT Projects weekly digest</h2>"
             "<p style=\"color:#666;margin:0 0 10px 0\">Active projects and their tasks, as of "
             "@{formatDateTime(utcNow(),'MMMM d, yyyy')}.</p>@{outputs('DigestHtml')}</div>"),
-            "runAfter": ra("DigestHtml")}),
+            "runAfter": ra("Digest_recipients")}),
     ])
     weekly_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Week", "interval": 1, "timeZone": TZ,
