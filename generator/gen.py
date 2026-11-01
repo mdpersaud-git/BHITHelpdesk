@@ -3693,9 +3693,53 @@ def hd26():
     due_filter = ("Status ne 'Completed' and ("
                   "(Due_x0020_Date ne null and Due_x0020_Date lt '@{utcNow()}') or "
                   "(Due_x0020_Date eq null and Modified lt '@{addDays(utcNow(),-5)}'))")
+
+    # --- "Due soon" pass (added 2026-11-01, Martin: "due both" = 48 h and 24 h heads-up) ---
+    # Before this, an assignee heard about a task when it was created/reassigned and then nothing until it was
+    # already overdue. This second sweep, same daily 9:15 run, picks every open task whose Due Date falls on
+    # tomorrow (1 day out) or the day after (2 days out), Eastern calendar days - Due Date is a date-only
+    # column stored as local midnight, and the sweep runs 9:15 ET, so "today" is already in the overdue pass
+    # above, never here. Assignee ONLY (email + Teams) - owners don't need a pre-due note, they get the overdue
+    # one if it comes to that - and nothing at all for a task with no assignee or no Due Date (no-due-date
+    # tasks are covered by the 5-day staleness rule in the overdue pass). Fires once per task per day it
+    # qualifies, i.e. exactly twice: the 2-days-out morning and the 1-day-out morning.
+    its = lambda k: f"items('Apply_to_each_due_soon')?['{k}']"
+    PID_s, ID_s = its('ProjectID'), its('ID')
+    ET = "'Eastern Standard Time'"
+    days_until = (f"div(sub(ticks(startOfDay(convertFromUtc({its('Due_x0020_Date')},{ET}))),"
+                  f"ticks(startOfDay(convertFromUtc(utcNow(),{ET})))),864000000000)")
+    when_txt = "if(equals(outputs('DaysUntil'),1),'tomorrow','in 2 days')"
+    due_soon_body = (f"<p>Heads-up: PRJ-@{{{PID_s}}} task <b>@{{{its('Title')}}}</b> is due @{{{when_txt}}}"
+                     f" (@{{formatDateTime({its('Due_x0020_Date')},'dddd, MMMM d')}}).</p>"
+                     f"<p>Status: @{{coalesce({its('Status')}?['Value'],'Not Started')}}</p>"
+                     f"<p><a href=\"{TASK_ITEM_URL}@{{{ID_s}}}\">Open this task</a> (use <b>Update task</b> to add notes or complete it) &middot; "
+                     f"<a href=\"{PRJ_ITEM_URL}@{{{PID_s}}}\">View the project</a></p>")
+    due_soon_loop_actions = seq([
+        ("AssigneeEmail_s", compose(f"@toLower(coalesce({its('Assigned_x0020_To')}?['Email'],''))")),
+        ("Get_task_project_s", {**spp("GetItem", {"id": f"@{PID_s}"}), "runAfter": ra("AssigneeEmail_s")}),
+        ("DaysUntil", {**compose("@" + days_until), "runAfter": ra("Get_task_project_s")}),
+        ("Should_remind", {**cond(
+            "@and(not(empty(outputs('AssigneeEmail_s'))),"
+            "contains(createArray(1,2),outputs('DaysUntil')),"
+            "not(contains(createArray('Completed','Cancelled'),coalesce(body('Get_task_project_s')?['Status']?['Value'],''))))",
+            seq([
+                ("Email_due_soon", mail("@outputs('AssigneeEmail_s')",
+                    f"[PRJ-@{{{PID_s}}}] Task due @{{{when_txt}}}: @{{{its('Title')}}}",
+                    "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">" + due_soon_body + "</div>")),
+                ("Tell_assignee_due_soon", {**cond(tell_cond("AssigneeEmail_s"),
+                    {"Assignee_due_soon": scope_msg("Assignee_due_soon_msg", "@outputs('AssigneeEmail_s')", due_soon_body)}),
+                    "runAfter": ra("Email_due_soon", status=("Succeeded", "Failed"))}),
+            ])), "runAfter": ra("DaysUntil")}),
+    ])
+    due_soon_loop = {"type": "Foreach", "foreach": "@body('Get_due_soon_tasks')?['value']", "actions": due_soon_loop_actions}
+    due_soon_filter = ("Status ne 'Completed' and Due_x0020_Date ne null and "
+                       "Due_x0020_Date ge '@{utcNow()}' and Due_x0020_Date lt '@{addDays(utcNow(),3)}'")
     actions = seq([
         ("Get_overdue_tasks", spt("GetItems", {"$filter": due_filter, "$top": 500})),
         ("Apply_to_each", loop),
+        ("Get_due_soon_tasks", {**spt("GetItems", {"$filter": due_soon_filter, "$top": 500}),
+            "runAfter": ra("Apply_to_each", status=("Succeeded", "Failed"))}),
+        ("Apply_to_each_due_soon", {**due_soon_loop, "runAfter": ra("Get_due_soon_tasks")}),
     ])
     # First self_check on a Foreach-based sweep flow in this codebase (every other self_check call wraps a
     # per-item trigger flow, never a loop) - result('Apply_to_each') is the documented, reliable way to get
@@ -3707,12 +3751,12 @@ def hd26():
     # error messages actually populate, same "verify on first live run" caveat as HD16's Slot23 reauthentication
     # card; if they come back empty/wrong, drop `leaf` here and rely on scoped=["Apply_to_each"] alone, which
     # still flags the run as a problem (just without the specific nested error text).
-    actions.update(self_check("Health", ["Apply_to_each"],
+    actions.update(self_check("Health", ["Apply_to_each", "Apply_to_each_due_soon"],
         f"[Help desk health] HD26 problem on overdue-task check",
-        "Today's overdue-task sweep ran, but these steps did not complete (last task processed shown):",
+        "Today's overdue/due-soon task sweep ran, but these steps did not complete (last task processed shown):",
         "concat('overdue-task sweep ',formatDateTime(utcNow(),'MMM d'))",
-        leaf=("Get_task_project", "Email_overdue", "Martin_overdue"),
-        after=ra("Apply_to_each", status=("Succeeded", "Failed")),
+        leaf=("Get_task_project", "Email_overdue", "Martin_overdue", "Get_task_project_s", "Email_due_soon"),
+        after=ra("Apply_to_each_due_soon", status=("Succeeded", "Failed", "Skipped")),
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     daily_trig = {"type": "Recurrence", "recurrence": {
         "frequency": "Day", "interval": 1, "timeZone": TZ,
