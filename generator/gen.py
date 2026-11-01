@@ -3884,6 +3884,85 @@ def digest_task_row():
     return (f"concat('<tr><td style=\"padding:4px 10px;border-bottom:1px solid #e5e7eb;font-size:12px\">',{title},"
             f"{td},{status},{td},{assignee},{td},{due},'</td></tr>')")
 
+# ---------- HD29 Update project task (from task) ----------
+def hd29():
+    """Triggered by an "Update task" button (SharePoint "For a selected item" trigger - same mechanism as
+    HD18's Quick close on Tickets and HD27's Add task on IT Projects) placed on the Project Tasks list's ID
+    column formatting (dashboard/task-id-column.json). Added 2026-10-31 because the modern list's details
+    pane autosaves field-by-field: a tech who typed Notes and then flipped Status to Completed in the pane
+    fired HD25 twice - the first run (Notes only) is silent by design, the second (Completed) went out with
+    whatever Notes happened to be saved at that instant. Reversed (Status first, Notes after) the completion
+    notice went out with an empty NOTES line and the note landed silently. SharePoint has no switch to turn
+    the pane's autosave off, so this gives the list a real "Save" button instead: one Run-flow panel with a
+    Notes box and a "Mark as completed" toggle, one submit, one PatchItem - so HD25 sees Notes and Status
+    change together, every time. Quick Edit (grid editing) on the list was turned off the same day
+    (list property DisableGridEditing=true, SharePoint-side only) so the pane's full edit form and this
+    button are the only two editing paths left.
+
+    Input shapes follow the HD27 lessons (see that docstring): the trigger's schema only supports
+    Text/Yes-No/File/Email/Number/Date, keys are per-hint-type counters (`text` for the first Text input,
+    `boolean` for the first Yes/No), and the whole thing has to be the canonical `rows`/`entity` wrapping
+    or the panel renders no inputs at all.
+
+    Notes are APPENDED, not replaced: the typed text is added as a new dated line ("Oct 31: ...") under
+    whatever Notes the task already has, so repeated updates build a running history on the task (and
+    therefore in the project's TaskDetails rollup and in HD25's completion NOTES paragraph) instead of each
+    edit overwriting the last. Blank Notes + toggle on = plain completion; Notes + toggle off = a progress
+    note (HD25 refreshes TaskDetails silently, as for any Notes-only edit); neither = nothing written and the
+    clicker is told so. The clicker gets a short Teams confirmation either way (there's no other feedback for
+    a notes-only update), identified from the same base64 `x-ms-user-email-encoded` header HD18/HD27 use."""
+    trig = {"For_a_selected_item": {"type": "Request", "kind": "ApiConnection", "inputs": {
+        "operationId": "GetItemHybridTriggerSchema",
+        "parameters": {"dataset": SITE, "table": PROJTASKS},
+        "schema": {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {
+            "text": {"description": "Added as a dated line under the task's existing notes", "title": "Notes (optional)",
+                     "type": "string", "x-ms-content-hint": "TEXT", "x-ms-dynamically-added": True},
+            "boolean": {"description": "Yes = set Status to Completed; owners and sponsors are notified with the notes above",
+                        "title": "Mark as completed", "type": "boolean", "x-ms-content-hint": "BOOLEAN",
+                        "x-ms-dynamically-added": True},
+            "entity": {"properties": {"ID": {"title": "ID", "type": "integer", "format": "int64"}},
+                       "type": "object", "required": []}}, "required": []}}}, "required": ["rows"]},
+        "host": {"connection": {"name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"}}},
+        "splitOn": "@triggerBody()['rows']"}}
+
+    today = "convertFromUtc(utcNow(),'Eastern Standard Time','MMM d')"
+    acts = seq([
+        ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
+        ("TaskId", compose("@triggerBody()?['entity']?['ID']")),
+        ("NoteText", compose("@trim(coalesce(triggerBody()?['text'],''))")),
+        ("Complete", compose("@equals(coalesce(triggerBody()?['boolean'],false),true)")),
+        ("Get_task", spt("GetItem", {"id": "@outputs('TaskId')"})),
+        ("Has_change", cond("@or(not(empty(outputs('NoteText'))),outputs('Complete'))", seq([
+            ("NewNotes", compose(
+                "@if(empty(outputs('NoteText')),coalesce(body('Get_task')?['Notes'],''),"
+                "if(empty(coalesce(body('Get_task')?['Notes'],'')),"
+                f"concat({today},': ',outputs('NoteText')),"
+                f"concat(body('Get_task')?['Notes'],decodeUriComponent('%0A'),{today},': ',outputs('NoteText'))))")),
+            ("NewStatus", compose("@if(outputs('Complete'),'Completed',coalesce(body('Get_task')?['Status']?['Value'],'Not Started'))")),
+            ("Update_task", spt("PatchItem", {
+                "id": "@outputs('TaskId')",
+                "item/Title": "@body('Get_task')?['Title']",
+                "item/Status/Value": "@outputs('NewStatus')",
+                "item/Notes": "@outputs('NewNotes')"})),
+            ("Confirm_update", scope_msg("Confirm_update_msg", "@outputs('Clicker')",
+                "<p><b>Task updated: @{body('Get_task')?['Title']}</b> (PRJ-@{body('Get_task')?['ProjectID']})</p>"
+                "<p>Status: @{outputs('NewStatus')}@{if(empty(outputs('NoteText')),'',concat('<br>Note added: ',outputs('NoteText')))}</p>"
+                "@{if(outputs('Complete'),'<p>The project owners and sponsors are being notified.</p>','<p>No one else is notified for a note-only update; it is now on the task and the project.</p>')}")),
+        ]), {
+            "Nothing_to_do": scope_msg("Nothing_to_do_msg", "@outputs('Clicker')",
+                "<p>Nothing was changed on task <b>@{body('Get_task')?['Title']}</b> - type a note, turn on <b>Mark as completed</b>, or both, then Run.</p>"),
+        })),
+    ])
+    acts.update(self_check("Health", ["Has_change"],
+        "[Help desk health] HD29 problem updating a task",
+        "A task was updated from the Update task button, but these steps did not complete:",
+        "concat('PRJ-',coalesce(body('Get_task')?['ProjectID'],'?'),' task \"',coalesce(body('Get_task')?['Title'],'?'),'\" (via Update task)')",
+        leaf=("Get_task", "Update_task"),
+        # Skipped too: if Get_task itself fails, Has_change never runs, and the self-check must still fire.
+        after=ra("Has_change", status=("Succeeded", "Failed", "Skipped")),
+        dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
+    return "HD29 Update project task (from task)", trig, acts
+
 # ---------- HD28 Project digest report ----------
 def hd28():
     """Runs weekly, Monday at 8am (best-practice review finding "no digest/summary report for projects" -
@@ -4020,7 +4099,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27(), hd28()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27(), hd28(), hd29()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
