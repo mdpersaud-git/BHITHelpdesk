@@ -3518,10 +3518,15 @@ def hd25():
         # div backgrounds.
         ("NoteLine_co", compose(f"@if(empty(coalesce({pt('Notes')},'')),'',concat('<p><b>NOTES:</b> ',replace({pt('Notes')},decodeUriComponent('%0A'),'<br>'),'</p>'))")),
         ("AssigneeEmail_co", {**compose(f"@{AsEmail}"), "runAfter": ra("NoteLine_co")}),
-        ("Email_assignee_done", {**mail("@outputs('AssigneeEmail_co')",
+        # Guarded (2026-10-31): a task completed with no Assigned To has an empty AssigneeEmail_co, and the
+        # Office 365 send action hard-fails on an empty To ("Parameter 'To' cannot be null or empty") - which
+        # the self-check then reports to Martin as an HD25 problem. Found by HD29's full-circle test on an
+        # unassigned test task; pre-existing, not caused by that day's other HD25 changes.
+        ("Email_assignee_done", {**cond("@not(empty(outputs('AssigneeEmail_co')))",
+            {"Email_assignee_done_send": mail("@outputs('AssigneeEmail_co')",
             f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
-            f"{COMPLETE_BANNER_EMAIL}<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p>@{{outputs('NoteLine_co')}}</div>"),
+            f"{COMPLETE_BANNER_EMAIL}<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p>@{{outputs('NoteLine_co')}}</div>")}),
             "runAfter": ra("AssigneeEmail_co")}),
         ("Tell_assignee_done", {**cond(tell_cond("AssigneeEmail_co"),
             {"Assignee_done_msg": scope_msg("Assignee_done_msg_s", "@outputs('AssigneeEmail_co')",
@@ -3604,7 +3609,7 @@ def hd25():
         f"[Help desk health] HD25 problem on task update",
         f"Task <b>@{{{pt('Title')}}}</b> on PRJ-@{{{PID}}} was updated, but these steps did not complete:",
         f"concat('PRJ-',{PID},' task (updated)')",
-        leaf=("Email_new_assignee", "Email_assignee_done", "Email_owners_done", "Martin_task_done",
+        leaf=("Email_new_assignee", "Email_assignee_done_send", "Email_owners_done", "Martin_task_done",
               "Get_project_tasks"),
         after=ra("Update_task", status=("Succeeded", "Failed", "Skipped")),
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
@@ -3926,6 +3931,7 @@ def hd29():
         "splitOn": "@triggerBody()['rows']"}}
 
     today = "convertFromUtc(utcNow(),'Eastern Standard Time','MMM d')"
+    clicker_ok = "@and(not(empty(outputs('Clicker'))),not(equals(outputs('Clicker'),'" + SUPPORT.lower() + "')))"
     acts = seq([
         ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
         ("TaskId", compose("@triggerBody()?['entity']?['ID']")),
@@ -3944,13 +3950,19 @@ def hd29():
                 "item/Title": "@body('Get_task')?['Title']",
                 "item/Status/Value": "@outputs('NewStatus')",
                 "item/Notes": "@outputs('NewNotes')"})),
-            ("Confirm_update", scope_msg("Confirm_update_msg", "@outputs('Clicker')",
+            # Teams 1:1 goes out from the IT Support account (shared_teams_1), so a click *by* that account
+            # itself can't be confirmed this way - CreateChat 400s with "Duplicate chat members" and the
+            # self-check alerts Martin for nothing (found 2026-10-31 live-testing from the IT Support login).
+            # Skip the chat for that one clicker; everyone else gets it.
+            ("Confirm_update", cond(clicker_ok, {
+                "Confirm_update_chat": scope_msg("Confirm_update_msg", "@outputs('Clicker')",
                 "<p><b>Task updated: @{body('Get_task')?['Title']}</b> (PRJ-@{body('Get_task')?['ProjectID']})</p>"
                 "<p>Status: @{outputs('NewStatus')}@{if(empty(outputs('NoteText')),'',concat('<br>Note added: ',outputs('NoteText')))}</p>"
-                "@{if(outputs('Complete'),'<p>The project owners and sponsors are being notified.</p>','<p>No one else is notified for a note-only update; it is now on the task and the project.</p>')}")),
+                "@{if(outputs('Complete'),'<p>The project owners and sponsors are being notified.</p>','<p>No one else is notified for a note-only update; it is now on the task and the project.</p>')}")})),
         ]), {
-            "Nothing_to_do": scope_msg("Nothing_to_do_msg", "@outputs('Clicker')",
-                "<p>Nothing was changed on task <b>@{body('Get_task')?['Title']}</b> - type a note, turn on <b>Mark as completed</b>, or both, then Run.</p>"),
+            "Nothing_to_do": cond(clicker_ok, {
+                "Nothing_to_do_chat": scope_msg("Nothing_to_do_msg", "@outputs('Clicker')",
+                "<p>Nothing was changed on task <b>@{body('Get_task')?['Title']}</b> - type a note, turn on <b>Mark as completed</b>, or both, then Run.</p>")}),
         })),
     ])
     acts.update(self_check("Health", ["Has_change"],
