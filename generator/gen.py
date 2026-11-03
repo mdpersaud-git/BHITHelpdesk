@@ -2587,9 +2587,12 @@ FLOW_DESCRIPTIONS = {
     "HD26 Project task overdue check": "Runs daily at 9:15am: nudges the task's assignee and the parent "
         "project's Owner(s)/creator (email + Teams) on any not-Completed task that's past its Due Date, or has "
         "no Due Date and hasn't been touched in 5+ days - repeating every day until resolved.",
-    "HD27 Add project task (from project)": "Runs from the 'Add task' button on the IT Projects ID column: "
-        "collects a task title (and optional assignee email) in the Run-flow panel, then creates that row in "
-        "Project Tasks with ProjectID already set to the clicked project - HD24 takes it from there.",
+    "HD27 Add project task (from project)": "Fill in a task title (required) and, optionally, a due date and "
+        "who to assign it to (name or email), then click Run flow to add it to this project - leave Assign to "
+        "blank to add it unassigned. The task is created right away; if you named someone and they match "
+        "exactly one person, they (and this project's owners) are notified automatically. If the name or email "
+        "doesn't match, or matches more than one person, the task is NOT created and you'll get a Teams "
+        "message instead - just click Add task again with a fuller name or their email.",
     "HD28 Project digest report": "Runs weekly, Monday at 8am: emails Martin only a digest of every active "
         "project (Status/Priority/Owner/Target Date/% Complete) and, under each one, a table of its own "
         "Project Tasks (Title/Status/Assigned To/Due Date).",
