@@ -2,7 +2,7 @@
   "sections": [
     {
       "displayname": "Overview",
-      "fields": ["Title", "Description", "Category"]
+      "fields": ["Project Title", "Description", "Category"]
     },
     {
       "displayname": "Timeline",
