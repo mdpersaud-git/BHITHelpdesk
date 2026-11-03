@@ -1972,25 +1972,42 @@ def hd12():
     sender = "toLower(coalesce(body('Get_sender')?['mail'],body('Get_sender')?['userPrincipalName'],''))"
     who = "coalesce(body('Get_sender')?['displayName'],outputs('SenderEmail'))"
     chat_id = f"{M}?['chatId']"
+    # Teams file shares attach as MD?['attachments'][]: {contentType:'reference', contentUrl, name, ...} -
+    # the Graph chatMessage shape (same one GetMessageDetails surfaces). HD12 never looked at this array at
+    # all, on either the text-only or the text+attachment path, so a file sent alongside (or instead of) a
+    # reply vanished without a trace once it reached the Teams message - confirmed 2026-11-02 when Arwa
+    # Ali's attachment-only reply on IT-118 produced no notification and no record (see the Has_text fix
+    # below for that half) and, separately, that even a *worded* reply with a file attached never carried the
+    # file onto the ticket - Joseph would see her text but have no way to know a PDF was sent. Rather than
+    # pull the actual bytes onto the ticket (the file lives in the sender's OneDrive via a Teams sharing
+    # link, not anywhere this flow's connections have standing access to download from, and that path hasn't
+    # been live-tested), this links out to it instead: the real fix is confirming the attachment shape and
+    # link actually resolve on a live test message, same as every other change in this flow.
+    first_att = f"first(coalesce({MD}?['attachments'],json('[]')))"
+    attachment_html = compose(
+        f"@if(greater(length(coalesce({MD}?['attachments'],json('[]'))),0),"
+        f"concat(decodeUriComponent('%0A'),'<p><b>Attachment:</b> <a href=\"',coalesce({first_att}?['contentUrl'],''),"
+        f"'\">',coalesce({first_att}?['name'],'file'),'</a></p>'),'')")
     def reply_here(name, html):
         return {"type": "Scope", "runAfter": {}, "actions": support_msg(name + "_msg", "@outputs('SenderEmail')", html)}
     found = seq([
         ("NewStatus", compose(f"@if(contains({arr([S_WAIT, S_SCHED, S_RES])},{tk}?['Status']?['Value']),'{S_PROG}',{tk}?['Status']?['Value'])")),
+        ("AttachmentHtml", attachment_html),
         ("Update_ticket", sp("PatchItem", {
             "id": f"@{TID}", "item/Title": f"@{tk}?['Title']",
             "item/Status/Value": "@outputs('NewStatus')", "item/LastNotifiedStatus": "@outputs('NewStatus')",
             "item/WaitingHours": 0, "item/ResolvedHours": 0,
-            "item/Conversation": f"@concat('[',{stamp},' | ',{who},' (Teams)] ',outputs('ReplyText'),decodeUriComponent('%0A%0A'),coalesce({tk}?['Conversation'],''))"})),
+            "item/Conversation": f"@concat('[',{stamp},' | ',{who},' (Teams)] ',outputs('ReplyText'),outputs('AttachmentHtml'),decodeUriComponent('%0A%0A'),coalesce({tk}?['Conversation'],''))"})),
         ("Thank_requester", reply_here("Thank_requester",
             f"<p>Thanks, your message was added to <b>IT-@{{{TID}}}</b>"
             f"@{{if(equals(outputs('NewStatus'),{tk}?['Status']?['Value']),'',concat(' and the ticket is back with IT (',outputs('NewStatus'),')'))}}.</p>")),
         ("Has_a_tech", {**cond(f"@not(empty(coalesce({tk}?['AssignedTo']?['Email'],'')))", {
             "Tell_the_tech": scope_msg("Tell_tech_msg", f"@{{{tk}?['AssignedTo']?['Email']}}",
-                f"<p>@{{{who}}} replied on IT-@{{{TID}}} in Teams:</p><p>@{{outputs('ReplyText')}}</p><p>{link(TID)}</p>")}),
+                f"<p>@{{{who}}} replied on IT-@{{{TID}}} in Teams:</p><p>@{{outputs('ReplyText')}}</p>@{{outputs('AttachmentHtml')}}<p>{link(TID)}</p>")}),
             "runAfter": ra("Thank_requester", status=("Succeeded", "Failed"))}),
         ("Has_channel_post", {**cond(f"@not(empty(coalesce({tk}?['ChannelMessageId'],'')))", {
             "Reply_in_channel": channel_reply(f"@{tk}?['ChannelMessageId']",
-                f"<p>@{{{who}}} replied in Teams: @{{outputs('ReplyText')}}</p>"
+                f"<p>@{{{who}}} replied in Teams: @{{outputs('ReplyText')}}</p>@{{outputs('AttachmentHtml')}}"
                 f"@{{if(equals(outputs('NewStatus'),{tk}?['Status']?['Value']),'',concat('<p>IT-',string({TID}),' is now <b>',outputs('NewStatus'),'</b></p>'))}}")}),
             "runAfter": ra("Has_a_tech", status=("Succeeded", "Failed", "Skipped"))}),
     ])
@@ -2064,7 +2081,20 @@ def hd12():
         ("SenderEmail", compose(f"@{sender}")),
         ("Not_IT_Support", cond(f"@not(equals(outputs('SenderEmail'),toLower('{SUPPORT}')))", seq([
             ("Msg_to_text", op("shared_conversionservice", "HtmlToText", {"Content": f"@{{coalesce({MD}?['body']?['content'],'')}}"})),
-            ("ReplyText", compose("@trim(body('Msg_to_text'))")),
+            # An attachment-only Teams message (no caption) converts to an empty string here, which used to
+            # fail Has_text below and make the whole flow a silent no-op - no ticket match, no reply, no tech
+            # notification, nothing. Found 2026-11-02: Arwa Ali sent a PDF with no text on IT-118's chat and
+            # Joseph never heard about it; the only reason it surfaced at all was the unrelated mailbox-based
+            # "missed activity" relay (see hd1()'s Is_a_Teams_missed_activity), which has no idea it's the
+            # same conversation HD12 already looked at and does nothing to route it to the assigned tech.
+            # Falling back to a placeholder that names the file keeps ReplyText non-empty whenever there's
+            # *either* real text or an attachment, so Has_text (and everything downstream: ticket matching,
+            # Update_ticket, Thank_requester, Has_a_tech/Tell_the_tech) runs the same as it already does for
+            # a worded reply - same fix family as the AttachmentHtml link added to found above.
+            ("ReplyText", compose(
+                "@if(not(empty(trim(body('Msg_to_text')))),trim(body('Msg_to_text')),"
+                f"if(greater(length(coalesce({MD}?['attachments'],json('[]'))),0),"
+                f"concat('(sent a file: ',coalesce({first_att}?['name'],'attachment'),')'),''))")),
             ("Has_text", cond("@not(empty(outputs('ReplyText')))", seq([
                 ("Open_tickets", sp("GetItems", {"$filter": f"RequesterEmail eq '@{{outputs('SenderEmail')}}' and Status ne '{S_CLOSED}'",
                                                  "$orderby": "Modified desc", "$top": 50})),
