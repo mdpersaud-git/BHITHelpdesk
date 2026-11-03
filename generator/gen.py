@@ -2081,18 +2081,26 @@ def hd12():
         ("SenderEmail", compose(f"@{sender}")),
         ("Not_IT_Support", cond(f"@not(equals(outputs('SenderEmail'),toLower('{SUPPORT}')))", seq([
             ("Msg_to_text", op("shared_conversionservice", "HtmlToText", {"Content": f"@{{coalesce({MD}?['body']?['content'],'')}}"})),
-            # An attachment-only Teams message (no caption) converts to an empty string here, which used to
-            # fail Has_text below and make the whole flow a silent no-op - no ticket match, no reply, no tech
-            # notification, nothing. Found 2026-11-02: Arwa Ali sent a PDF with no text on IT-118's chat and
-            # Joseph never heard about it; the only reason it surfaced at all was the unrelated mailbox-based
-            # "missed activity" relay (see hd1()'s Is_a_Teams_missed_activity), which has no idea it's the
-            # same conversation HD12 already looked at and does nothing to route it to the assigned tech.
-            # Falling back to a placeholder that names the file keeps ReplyText non-empty whenever there's
-            # *either* real text or an attachment, so Has_text (and everything downstream: ticket matching,
-            # Update_ticket, Thank_requester, Has_a_tech/Tell_the_tech) runs the same as it already does for
-            # a worded reply - same fix family as the AttachmentHtml link added to found above.
+            # An attachment-only Teams message (no caption) has a body content of just
+            # <attachment id="..."></attachment> tag(s), with no text at all - HtmlToText on that returns a
+            # genuinely EMPTY output (Content-Length: 0), not an empty string: body('Msg_to_text') comes back
+            # null, and trim(null) is itself an invalid call (InvalidTemplate: "the provided parameters for
+            # template language function 'trim' are not valid"), not something that evaluates to "". So the old
+            # unconditional trim(body('Msg_to_text')) didn't quietly no-op on an attachment-only message, it
+            # threw and failed the whole run outright - confirmed live-testing this fix 2026-11-02 by opening
+            # HD12's actual 11:37 AM run from earlier that day: Arwa Ali's attachment-only reply on IT-118 (two
+            # attachments, no caption) failed exactly this way. HD12 has no self_check, so that failed run never
+            # alerted anyone; the only reason the message surfaced at all was the unrelated mailbox-based
+            # "missed activity" relay (see hd1()'s Is_a_Teams_missed_activity), which has no idea it's the same
+            # conversation HD12 already crashed on. Coalescing to '' before trim (as Msg_to_text's own Content
+            # input already does) avoids the crash; falling back to a placeholder that names the file then keeps
+            # ReplyText non-empty whenever there's *either* real text or an attachment, so Has_text (and
+            # everything downstream: ticket matching, Update_ticket, Thank_requester, Has_a_tech/Tell_the_tech)
+            # runs the same as it already does for a worded reply - same fix family as the AttachmentHtml link
+            # added to found above. Only the first attachment is named here even when (as in IT-118's case)
+            # there's more than one - same single-attachment limit as AttachmentHtml.
             ("ReplyText", compose(
-                "@if(not(empty(trim(body('Msg_to_text')))),trim(body('Msg_to_text')),"
+                "@if(not(empty(trim(coalesce(body('Msg_to_text'),'')))),trim(coalesce(body('Msg_to_text'),'')),"
                 f"if(greater(length(coalesce({MD}?['attachments'],json('[]'))),0),"
                 f"concat('(sent a file: ',coalesce({first_att}?['name'],'attachment'),')'),''))")),
             ("Has_text", cond("@not(empty(outputs('ReplyText')))", seq([
