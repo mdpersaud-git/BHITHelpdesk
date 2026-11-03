@@ -2517,10 +2517,18 @@ PROBE_LABELS = {"Probe_Outlook": "Outlook", "Probe_Teams_IT": "Teams (IT Support
 
 # Flow-level "Description" (Power Automate flow Details > Edit, also shown in the flow list and when importing
 # a package). SharePoint's button-flow "Run flow" confirm panel shows this under the owner line, so for HD18
-# it doubles as on-panel instructions for a flow with no adaptive-card UI of its own. For every other flow it's
-# just a one-line "what this does" summary, so the flow (or its zip, or an import package) is self-describing
-# without having to go dig through gen.py or IT-Tech-Guide.md. Keyed by flow display name so a re-import with
-# Update keeps it instead of silently dropping back to blank. Added 2026-10-26 for every flow, not just HD18.
+# and HD27 it doubles as on-panel instructions for a flow with no adaptive-card UI of its own. For every other
+# flow it's just a one-line "what this does" summary, so gen.py (and this dict) is a single place to read what
+# a flow does without digging through IT-Tech-Guide.md. Keyed by flow display name. Added 2026-10-26 for every
+# flow, not just HD18.
+#
+# IMPORTANT (confirmed live 2026-11-03, HD27): re-importing a zip with Update does NOT push a changed value
+# here to the live flow's description - the flow keeps whatever its Details > Edit panel already had (blank,
+# for a flow whose description was never set by hand), even though the reimported package's own
+# definition.json correctly carries the new text. So this dict is the source of truth to copy from, but a
+# wording change only reaches the live SharePoint "Run flow" panel after also pasting it into that flow's own
+# Power Automate Details > Edit > Description box and saving - Update-importing the zip is not enough on its
+# own. Whether a brand-new "Create as new" import sets it correctly (as opposed to Update) hasn't been tested.
 FLOW_DESCRIPTIONS = {
     "HD1 Email intake": "Reads the shared support mailbox: creates a ticket from a new email, files a reply "
         "against its existing ticket or project, relays Power Automate alerts and Teams missed-activity "
