@@ -1,0 +1,24 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "display": "flex",
+    "flex-direction": "column",
+    "align-items": "center",
+    "justify-content": "center",
+    "width": "100%",
+    "text-align": "center"
+  },
+  "children": [
+    {
+      "elmType": "span",
+      "txtContent": "=@currentField + '%'",
+      "style": { "font-weight": "600" }
+    },
+    {
+      "elmType": "span",
+      "txtContent": "=[$Task_x0020_Progress]",
+      "style": { "font-size": "11px", "color": "#605e5c" }
+    }
+  ]
+}

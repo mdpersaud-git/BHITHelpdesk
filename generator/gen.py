@@ -29,7 +29,7 @@ PT_STATUSES = ["Not Started", "In Progress", "Completed"]
 #   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text), LastNotifiedNotes (Text, added 2026-10-30 -
 #   same no-Show*Form-restriction pattern as its two siblings, a plain bookkeeping field HD24/HD25 stamp/compare,
 #   see hd25()'s docstring for why Notes needed one of these too)
-# IT Projects columns added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 tasks complete") and
+# IT Projects columns added alongside this feature: Task_x0020_Progress (Text, e.g. "3 of 5 Tasks" or "1 of 1 Task") and
 # TaskDetails (Multiple lines of text, RichText="TRUE" as of 2026-10-31 - a bullet-per-task list, each title
 # a clickable link to that task's own DispForm via TASK_ITEM_URL - shown as a normal field on the project
 # item itself, via "Edit columns in the form"; ShowInEditForm/ShowInNewForm = TRUE, ShowInDisplayForm/
@@ -3395,7 +3395,7 @@ def hd24():
     Owner(s) and creator, then emails + Teams-messages: the task's Assigned To person (what the task is, when
     it's due), and every project Owner plus the project's creator (who it's assigned to) - same "both the
     assignee and the project's own people" shape hd19()/hd20() use for Owner/ProjectSponsor on the project
-    itself. Recomputes the parent project's Task Progress rollup ("X of Y tasks complete") across every task on
+    itself. Recomputes the parent project's Task Progress rollup ("X of Y Task(s)", singular/plural off the total) across every task on
     that project and patches it onto the IT Projects item, alongside TaskDetails - a bullet-per-task
     plain-text list (title, Status, Assigned To, due date if set, built by task_line()/TaskLines) shown as
     a normal field on the project item itself so it shows every task's status and assignee, not just the
@@ -3477,7 +3477,8 @@ def hd24():
             "from": "@body('Get_project_tasks')?['value']", "select": "@" + task_line()}}),
         ("ProgressText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
-            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
+            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),"
+            "if(equals(length(body('Get_project_tasks')?['value']),1),' Task',' Tasks')))"),
             "runAfter": ra("TaskLines")}),
         ("TaskDetailsText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'',"
@@ -3647,7 +3648,8 @@ def hd25():
             "from": "@body('Get_project_tasks')?['value']", "select": "@" + task_line()}}),
         ("ProgressText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'No tasks yet',"
-            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),' tasks complete'))"),
+            "concat(string(length(body('Completed_tasks'))),' of ',string(length(body('Get_project_tasks')?['value'])),"
+            "if(equals(length(body('Get_project_tasks')?['value']),1),' Task',' Tasks')))"),
             "runAfter": ra("TaskLines")}),
         ("TaskDetailsText", {**compose(
             "@if(equals(length(body('Get_project_tasks')?['value']),0),'',"
