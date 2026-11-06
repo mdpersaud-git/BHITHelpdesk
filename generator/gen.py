@@ -3948,6 +3948,18 @@ def hd27():
                    '"MaximumEntitySuggestions":20,"PrincipalSource":15,"PrincipalType":1,'
                    '"QueryString":"@{outputs(\'AssigneeText\')}"}}')
 
+    # Same "Duplicate chat members" crash HD29 already hit and fixed 2026-10-31 (see that docstring): a Teams
+    # 1:1 confirmation sent to outputs('Clicker') 400s when the clicker IS the IT Support account itself
+    # (CreateChat can't open a chat between IT Support and IT Support). HD27 never got this guard - found
+    # 2026-11-06 from Power Automate's own weekly failed-flows digest (5 failures, all "Name_nf_open_chat ...
+    # Duplicate chat members"), and none of them ever reached HD27's self_check below because leaf= only
+    # watched the three Create_task_* actions, not these not-created notifications - a hard crash on one of
+    # these scopes failed the whole run before self_check's own Health_problems step ever ran, so the digest
+    # was the only place this ever surfaced. clicker_ok below mirrors HD29's exact pattern; Email_nf/Name_nf/
+    # Name_amb are now also named in self_check's leaf= so a future failure here (e.g. a transient Teams
+    # error for a real clicker) actually emails Martin instead of only showing up in Power Automate's own
+    # digest a week later.
+    clicker_ok = "@and(not(empty(outputs('Clicker'))),not(equals(outputs('Clicker'),'" + SUPPORT.lower() + "')))"
     acts = seq([
         ("Clicker", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
         ("ProjectId", compose("@triggerBody()?['entity']?['ID']")),
@@ -3959,8 +3971,9 @@ def hd27():
                 ("Ensure_by_email", sp_http("POST", "_api/web/ensureuser",
                     body="{\"logonName\":\"i:0#.f|membership|@{toLower(outputs('AssigneeText'))}\"}")),
                 ("Create_task_email", make_create("@body('Ensure_by_email')?['LoginName']", after=ra("Ensure_by_email"))),
-                ("Email_not_found", {**scope_msg("Email_nf", "@outputs('Clicker')",
-                    not_created("doesn't match anyone in Branthaven's directory")),
+                ("Email_not_found", {**cond(clicker_ok, {
+                    "Email_nf_notify": scope_msg("Email_nf", "@outputs('Clicker')",
+                        not_created("doesn't match anyone in Branthaven's directory"))}),
                     "runAfter": ra("Ensure_by_email", status=("Failed",))}),
             ]), seq([
                 ("Search_by_name", sp_http("POST",
@@ -3972,13 +3985,15 @@ def hd27():
                     "One_match": {"case": "1", "actions": {
                         "Create_task_name": make_create("@outputs('Candidates')[0]?['Key']")}},
                     "No_match": {"case": "0", "actions": {
-                        "Name_no_match": scope_msg("Name_nf", "@outputs('Clicker')",
-                            not_created("didn't match anyone in Branthaven's directory"))}},
+                        "Name_no_match": cond(clicker_ok, {
+                            "Name_nf_notify": scope_msg("Name_nf", "@outputs('Clicker')",
+                                not_created("didn't match anyone in Branthaven's directory"))})}},
                 }, "default": {"actions": seq([
                     ("Candidate_names", {"type": "Select", "runAfter": {},
                         "inputs": {"from": "@outputs('Candidates')", "select": "@item()?['DisplayText']"}}),
-                    ("Name_ambiguous", scope_msg("Name_amb", "@outputs('Clicker')",
-                        not_created("matched more than one person: @{join(body('Candidate_names'),', ')}"))),
+                    ("Name_ambiguous", cond(clicker_ok, {
+                        "Name_amb_notify": scope_msg("Name_amb", "@outputs('Clicker')",
+                            not_created("matched more than one person: @{join(body('Candidate_names'),', ')}"))})),
                 ])}}),
             ])),
         }, {
@@ -3989,7 +4004,8 @@ def hd27():
         "[Help desk health] HD27 problem adding a task",
         "A task was added from the Add task button, but these steps did not complete:",
         "concat('PRJ-',outputs('ProjectId'),' task \"',outputs('TaskTitle'),'\" (via Add task)')",
-        leaf=("Create_task_email", "Create_task_name", "Create_task_unassigned"),
+        leaf=("Create_task_email", "Create_task_name", "Create_task_unassigned",
+              "Email_nf_open_chat", "Name_nf_open_chat", "Name_amb_open_chat"),
         after=ra("Resolve_assignee", status=("Succeeded", "Failed")),
         dash_id=DASH_PROJHEALTH, dash_title="ProjectHealth"))
     return "HD27 Add project task (from project)", trig, acts
