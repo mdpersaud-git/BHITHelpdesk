@@ -1022,12 +1022,15 @@ def hd3():
     actions["CreatedLine"]["runAfter"] = ra("Planner_task", status=ANY3)
     actions["Update_item"]["runAfter"] = ra("Post_to_Help_Desk_channel", status=("Succeeded", "Failed"))
     # Direct 1:1 Teams message to the on-duty people, after the record is complete; never blocks the ticket.
+    # Since 2026-11-09 (per Martin's feedback that a DM for literally every new ticket was too spammy on top
+    # of the channel post below), this direct ping only fires for High priority - Medium/Low tickets still
+    # post to the Help Desk channel (Post_to_Help_Desk_channel above), which stays visible to everyone.
     new_ping = (f"<p><b>New ticket IT-@{{{ID}}}</b> — @{{{t('Title')}}}</p>"
                 f"<p>From: @{{outputs('ReqEmail')}} &nbsp;·&nbsp; Priority: @{{coalesce({t('Priority/Value')},'Medium')}}"
                 f" &nbsp;·&nbsp; Category: @{{coalesce({t('Category/Value')},'')}}</p>"
                 f"<p>{link(ID)}</p>")
-    actions["Tell_IT_new_ticket"] = {"type": "Scope", "runAfter": ra("Update_item", status=ANY3),
-                                     "actions": team_msgs("NewTicket_msg", new_ping, NEW_TICKET_PING_TEAM)}
+    actions["Tell_IT_new_ticket"] = cond(f"@equals(coalesce({t('Priority/Value')},'Medium'),'High')",
+        team_msgs("NewTicket_msg", new_ping, NEW_TICKET_PING_TEAM), after=ra("Update_item", status=ANY3))
     # Monitoring: did the requester confirmation, Planner task, channel post and tech ping all go out?
     no_channel = ("if(empty(body('Post_to_Help_Desk_channel')?['id']),"
                   "createArray(json('{\"name\":\"Post_to_Help_Desk_channel\",\"status\":\"Failed\"}')),json('[]'))")
@@ -1203,9 +1206,11 @@ def hd4():
     # "add internal note" box, techs type directly into the field and the flow diffs the length against
     # LastNotifiedInternalLen to find just the newly-added leading text. Never shown to the requester - Note to
     # requester/Conversation (both of which do reach the requester, Conversation via the "earlier" ticket-history
-    # paragraph in partA/partC's emails) are untouched by this; InternalNotes is a wholly separate field. Notifies
-    # every tech (Martin, Talal, Joseph - TECHS), not just the one who didn't write it, same as HD20 notifying
-    # every project Owner regardless of who added the internal note.
+    # paragraph in partA/partC's emails) are untouched by this; InternalNotes is a wholly separate field.
+    # Since 2026-11-09 (per Martin's feedback that notifying all 3 techs on every note was too spammy), this
+    # notifies only Martin plus the ticket's assigned tech (if any, and if different from Martin) - not the
+    # full TECHS roster regardless of who's actually on the ticket. AssignedTechEmail is computed once and
+    # reused by both the email "To" line and the conditional tech Teams ping below.
     internal_len = f"length(coalesce({t('InternalNotes')},''))"
     internal_changed = f"greater({internal_len},coalesce({t('LastNotifiedInternalLen')},0))"
     _IN = f"coalesce({t('InternalNotes')},'')"
@@ -1215,14 +1220,21 @@ def hd4():
     # widens the whole expression to Float and substring()'s length parameter rejects that - wrap in int(...)
     # (same fix HD20 needed for the identical bug on IT Projects, see its docstring).
     new_internal_text = f"substring(concat({_IN},' '),0,int(min({internal_len},max(0,sub({internal_len},coalesce({t('LastNotifiedInternalLen')},0))))))"
-    tech_emails = [e for e, _ in TECHS]
     partD = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
-        ("Email_internal_note", mail(";".join(tech_emails), f"[IT-@{{{ID}}}] Internal note: @{{{t('Title')}}}",
+        ("AssignedTechEmail", compose(f"@toLower(coalesce({t('AssignedTo/Email')},''))")),
+        ("Email_internal_note", mail(
+            f"@{{if(or(empty(outputs('AssignedTechEmail')),equals(outputs('AssignedTechEmail'),'{ME}')),'{ME}',concat('{ME}',';',outputs('AssignedTechEmail')))}}",
+            f"[IT-@{{{ID}}}] Internal note: @{{{t('Title')}}}",
             style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p>@{{outputs('InternalLine')}}<p>{lnk}</p></div>")),
     ])
-    partD["Tell_techs_internal_note"] = {"type": "Scope", "runAfter": ra("Email_internal_note", status=("Succeeded", "Failed")),
-        "actions": team_msgs("Internal_note_msg", f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}", tech_emails)}
+    partD["Tell_Martin_internal_note"] = {**scope_msg("Internal_note_martin_msg", ME,
+        f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}"),
+        "runAfter": ra("Email_internal_note", status=("Succeeded", "Failed"))}
+    partD["Tell_assigned_tech_internal_note"] = {**cond(f"@and(not(empty(outputs('AssignedTechEmail'))),not(equals(outputs('AssignedTechEmail'),'{ME}')))", {
+        "Tell_tech_internal_note": scope_msg("Internal_note_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
+            f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}")}),
+        "runAfter": ra("Tell_Martin_internal_note", status=("Succeeded", "Failed", "Skipped"))}
 
     def var(name, typ, val):
         return {"type": "InitializeVariable", "inputs": {"variables": [{"name": name, "type": typ, "value": val}]}}
@@ -1367,7 +1379,7 @@ def hd4():
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
         leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
-              "Email_new_tech", "New_tech_msg", "Email_internal_note", "Internal_note_msg_0", "Internal_note_msg_1", "Internal_note_msg_2")))
+              "Email_new_tech", "New_tech_msg", "Email_internal_note", "Internal_note_martin_msg", "Internal_note_tech_msg")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1431,18 +1443,17 @@ def hd6():
             {**team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM),
              "Email_unassigned_5h": mail(f"{ME};{TECH2}", f"[IT-@{{{ID}}}] Still unassigned after 5 hours",
                  f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
-        # Once it's assigned, this reminder goes to that tech alone — Teams and, since 2026-10-27, email too.
-        # Only while it's still unassigned does Joseph get it too (alongside Martin, who's the fallback
-        # recipient in that case) — same audience as the 5-hour unassigned ping above, just repeating daily
-        # instead of firing once — and, since 2026-10-27, Martin+Joseph also get this one by EMAIL (not just
-        # Teams) specifically while it's still unassigned, per Martin's request.
+        # Once it's assigned, this reminder goes to that tech alone, Teams only (since 2026-11-09 — the
+        # duplicate email was dropped, and the cadence slowed to every 2 business days, per Martin's
+        # feedback that the daily tech pings were too spammy; a tech working the ticket already sees it
+        # live in Planner/the ticket itself, so one Teams nudge every 2 days is enough). Only while it's
+        # still unassigned does Joseph get it too (alongside Martin, who's the fallback recipient in that
+        # case) — same audience as the 5-hour unassigned ping above, still firing every business day on
+        # both Teams and email, since nobody owns an unassigned ticket yet and that case stays untouched.
         ("Open_a_full_business_day", cond(f"@and({biz},greaterOrEquals(outputs('S'),{DAY_H}),equals(mod(outputs('S'),{DAY_H}),0))", seq([
-            ("Tell_tech_open_days", scope_msg("Open_days_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")),
-            ("Email_tech_open_days", cond(f"@not(empty(coalesce({it('AssignedTo')}?['Email'],'')))", {
-                "Send_email_tech_open_days": mail(f"@{{{it('AssignedTo')}?['Email']}}",
-                    f"[IT-@{{{ID}}}] Still open after @{{div(outputs('S'),{DAY_H})}} business day(s)",
-                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} business day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
+            ("Tech_open_days_reminder", cond(f"@and(not(empty(coalesce({it('AssignedTo')}?['Email'],''))),equals(mod(outputs('S'),{2*DAY_H}),0))", {
+                "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{{it('AssignedTo')}?['Email']}}",
+                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
             ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))", {
                 "Open_days_msg_joseph": scope_msg("Open_days_joseph_msg", TECH2,
                     f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>"),
@@ -1457,17 +1468,15 @@ def hd6():
         new_case[k]["runAfter"] = ra(list(new_case.keys())[list(new_case.keys()).index(k) - 1], status=("Succeeded", "Failed", "Skipped"))
     waiting_case = seq([
         ("W", compose(f"@add(int(coalesce({it('WaitingHours')},0)),1)")),
-        # Since 2026-10-27, the tech (assigned tech, or Martin if somehow unassigned) is also told by Teams
-        # and email whenever this fires — both the daily "still waiting" reminder and the 5-day auto-close —
-        # per Martin's request, alongside the existing requester-facing notifications below.
+        # Since 2026-10-27, the tech (assigned tech, or Martin if somehow unassigned) is also told whenever
+        # this fires — both the daily "still waiting" reminder and the 5-day auto-close — per Martin's
+        # request, alongside the existing requester-facing notifications below. Since 2026-11-09 these tech
+        # pings are Teams-only (the duplicate email was dropped per Martin's spam feedback).
         ("Five_days_waiting", cond(f"@greaterOrEquals(outputs('W'),{5*DAY_H})", {
             "Close_no_reply": sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/Status/Value": S_CLOSED,
                 "item/WaitingHours": "@outputs('W')",
                 "item/Conversation": f"@concat('Closed automatically: no reply in 5 days.',decodeUriComponent('%0A%0A'),coalesce({it('Conversation')},''))"}),
             "Tell_tech_closed_no_reply": scope_msg("Closed5d_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                f"<p>IT-@{{{ID}}} was closed automatically after 5 business days with no reply from the requester: @{{{it('Title')}}}</p><p>{lnk}</p>"),
-            "Email_tech_closed_no_reply": mail(f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                f"[IT-@{{{ID}}}] Closed automatically — no reply in 5 business days",
                 f"<p>IT-@{{{ID}}} was closed automatically after 5 business days with no reply from the requester: @{{{it('Title')}}}</p><p>{lnk}</p>")},
             seq([
                 ("Update_W", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/WaitingHours": "@outputs('W')"})),
@@ -1485,15 +1494,13 @@ def hd6():
                         "runAfter": ra("Email_reminder", status=("Succeeded", "Failed"))}),
                     ("Tell_tech_waiting_reminder", scope_msg("Waiting_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                         f"<p>IT-@{{{ID}}} is still waiting on the requester after @{{div(outputs('W'),{DAY_H})}} business day(s): @{{{it('Title')}}}</p><p>{lnk}</p>")),
-                    ("Email_tech_waiting_reminder", mail(f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                        f"[IT-@{{{ID}}}] Still waiting on requester after @{{div(outputs('W'),{DAY_H})}} business day(s)",
-                        f"<p>IT-@{{{ID}}} is still waiting on the requester after @{{div(outputs('W'),{DAY_H})}} business day(s): @{{{it('Title')}}}</p><p>{lnk}</p>")),
                 ]))),
             ]))),
     ])
-    # Since 2026-10-27, the tech (assigned tech, or Martin if somehow unassigned) is also told by Teams and
-    # email both when the 24h "is it fixed?" reminder goes to the requester and when the ticket auto-closes
-    # at 48h, per Martin's request, alongside the existing requester-facing notifications below.
+    # Since 2026-10-27, the tech (assigned tech, or Martin if somehow unassigned) is also told both when the
+    # 24h "is it fixed?" reminder goes to the requester and when the ticket auto-closes at 48h, per Martin's
+    # request, alongside the existing requester-facing notifications below. Since 2026-11-09 these tech pings
+    # are Teams-only (the duplicate email was dropped per Martin's spam feedback).
     resolved_case = seq([
         ("ResolvedAge", compose(f"@div(sub(ticks(utcNow()),ticks(coalesce({it('ResolvedOn')},utcNow()))),36000000000)")),
         ("Window_48h", cond("@greaterOrEquals(outputs('ResolvedAge'),48)", {
@@ -1511,9 +1518,6 @@ def hd6():
                     "runAfter": ra("Done_in_Planner", status=("Succeeded", "Failed", "Skipped"))}),
                 ("Tell_tech_auto_closed", scope_msg("AutoClosed_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                     f"<p>IT-@{{{ID}}} was closed automatically 48 hours after resolution (no reply from the requester): @{{{it('Title')}}}</p><p>{lnk}</p>")),
-                ("Email_tech_auto_closed", mail(f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                    f"[IT-@{{{ID}}}] Closed automatically — resolved 48h with no reply",
-                    f"<p>IT-@{{{ID}}} was closed automatically 48 hours after resolution (no reply from the requester): @{{{it('Title')}}}</p><p>{lnk}</p>")),
             ])},
             {"Reminder_24h": cond(f"@and(greaterOrEquals(outputs('ResolvedAge'),24),lessOrEquals(int(coalesce({it('ResolvedHours')},0)),0),not(empty({req})))", seq([
                 ("Mark_reminded", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/ResolvedHours": 1})),
@@ -1530,9 +1534,6 @@ def hd6():
                             "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. Otherwise it will be marked Resolved automatically after 48 hours.</p>" + support_links(ID, it('Title')))}}),
                     "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed"))}),
                 ("Tell_tech_resolved_reminder", scope_msg("ResolvedReminder_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                    f"<p>IT-@{{{ID}}} was marked resolved and the requester hasn't confirmed after 24 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")),
-                ("Email_tech_resolved_reminder", mail(f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
-                    f"[IT-@{{{ID}}}] Resolved ticket not yet confirmed after 24 hours",
                     f"<p>IT-@{{{ID}}} was marked resolved and the requester hasn't confirmed after 24 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")),
             ]))})),
     ])
