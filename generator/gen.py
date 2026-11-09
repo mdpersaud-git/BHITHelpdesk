@@ -2216,28 +2216,35 @@ def hd14():
                        "text_5": prop("Screenshot", "Optional: picture as a data URI from the app")},
         "required": ["text", "text_1", "text_2", "text_3"]}}}}
     T = lambda k: f"triggerBody()?['{k}']"
+    item_fields = {
+        "item/Title": f"@substring(coalesce({T('text')},'(no summary)'),0,min(length(coalesce({T('text')},'(no summary)')),250))",
+        "item/Category/Value": f"@if(empty(coalesce({T('text_1')},'')),'Uncategorized',{T('text_1')})",
+        "item/Priority/Value": f"@if(startsWith(coalesce({T('text_2')},''),'I can'),'High',if(equals({T('text_2')},'No rush'),'Low','Medium'))",
+        "item/Details": f"@if(equals(outputs('Requester'),outputs('Submitter')),{T('text_3')},concat('[Logged by ',outputs('Submitter'),' on behalf of ',outputs('Requester'),']',decodeUriComponent('%0A%0A'),{T('text_3')}))",
+        "item/RequesterEmail": "@outputs('Requester')",
+        "item/Source/Value": "Teams form",
+        "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Teams form by ',outputs('Requester'),decodeUriComponent('%0A%0A'))",
+        "item/Status/Value": S_OPEN}
     acts = seq([
         ("Submitter", compose("@toLower(base64ToString(triggerOutputs()?['headers']?['x-ms-user-email-encoded']))")),
         ("OnBehalf", compose("@toLower(trim(coalesce(triggerBody()?['text_4'],'')))")),
         ("Requester", compose("@if(and(endsWith(outputs('OnBehalf'),'@branthaven.com'),not(contains(outputs('OnBehalf'),' ')),not(equals(outputs('OnBehalf'),'@branthaven.com'))),outputs('OnBehalf'),outputs('Submitter'))")),
-        ("Create_item", sp("PostItem", {
-            "item/Title": f"@substring(coalesce({T('text')},'(no summary)'),0,min(length(coalesce({T('text')},'(no summary)')),250))",
-            "item/Category/Value": f"@if(empty(coalesce({T('text_1')},'')),'Uncategorized',{T('text_1')})",
-            "item/Priority/Value": f"@if(startsWith(coalesce({T('text_2')},''),'I can'),'High',if(equals({T('text_2')},'No rush'),'Low','Medium'))",
-            "item/Details": f"@if(equals(outputs('Requester'),outputs('Submitter')),{T('text_3')},concat('[Logged by ',outputs('Submitter'),' on behalf of ',outputs('Requester'),']',decodeUriComponent('%0A%0A'),{T('text_3')}))",
-            "item/Requester/Claims": "@outputs('Requester')",
-            "item/RequesterEmail": "@outputs('Requester')",
-            "item/Source/Value": "Teams form",
-            "item/Conversation": f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from Teams form by ',outputs('Requester'),decodeUriComponent('%0A%0A'))",
-            "item/Status/Value": S_OPEN})),
+        # Requester may be a shared/resource mailbox (e.g. creekviewadmin@branthaven.com) that SharePoint's
+        # EnsureUser lookup can't resolve to a real person, which fails the whole PostItem with "The specified
+        # user ... could not be found" if item/Requester/Claims is set. Try with the Person column first; if
+        # that fails, retry without it so the ticket still gets created, with RequesterEmail still holding the
+        # typed address. Found 2026-11-09 testing the new manual on-behalf fallback field in the Teams app.
+        ("Create_item_try", sp("PostItem", {**item_fields, "item/Requester/Claims": "@outputs('Requester')"})),
+        ("Create_item_fallback", sp("PostItem", item_fields, after=ra("Create_item_try", status=("Failed",)))),
         ("Has_a_screenshot", cond("@contains(coalesce(triggerBody()?['text_5'],''),'base64,')", {
             "Shot_clean": compose("@replace(triggerBody()?['text_5'],'\"','')"),
             "Add_screenshot": sp("CreateAttachment", {
-                "itemId": "@body('Create_item')?['ID']",
+                "itemId": "@coalesce(body('Create_item_try')?['ID'],body('Create_item_fallback')?['ID'])",
                 "displayName": "@concat('screenshot.',replace(first(split(last(split(outputs('Shot_clean'),'data:image/')),';')),'jpeg','jpg'))",
-                "body": "@base64ToBinary(last(split(outputs('Shot_clean'),'base64,')))"}, after={"Shot_clean": ["Succeeded"]})})),
+                "body": "@base64ToBinary(last(split(outputs('Shot_clean'),'base64,')))"}, after={"Shot_clean": ["Succeeded"]})},
+            after={"Create_item_try": ["Succeeded", "Failed"], "Create_item_fallback": ["Succeeded", "Skipped", "Failed"]})),
         ("Respond_to_the_app", {"type": "Response", "kind": "PowerApp", "runAfter": ra("Has_a_screenshot"),
-            "inputs": {"statusCode": 200, "body": {"ticketid": "@{body('Create_item')?['ID']}"},
+            "inputs": {"statusCode": 200, "body": {"ticketid": "@{coalesce(body('Create_item_try')?['ID'],body('Create_item_fallback')?['ID'])}"},
                        "schema": {"type": "object", "properties": {"ticketid": {"title": "ticketid", "x-ms-dynamically-added": True, "type": "string"}}}}}),
     ])
     return "HD14 Teams app intake", trig, acts
