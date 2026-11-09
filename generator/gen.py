@@ -946,7 +946,16 @@ def hd3():
         ("Has_requester", cond("@and(not(empty(outputs('ReqEmail'))),outputs('IsInternal'))", seq([
             ("Ensure_requester", sp_http("POST", "_api/web/ensureuser",
                 body="{\"logonName\":\"i:0#.f|membership|@{outputs('ReqEmail')}\"}")),
-            ("Give_requester_read", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)")),
+            # EnsureUser 400s for a shared/resource mailbox (e.g. a shared mailbox submitted via HD14's
+            # on-behalf manual-entry fallback) - SharePoint can't resolve it to a real identity, so there's
+            # no principal to grant Read to. Best effort: only call addroleassignment when Ensure_requester
+            # actually returned an Id, and explicitly handle both outcomes so a shared-mailbox requester
+            # doesn't fail this whole branch (and with it this whole ticket-creation run) - found 2026-11-09
+            # via the HD14 shared-mailbox-fallback full-circle test: "Succeeded" at the top, self-check clean,
+            # but this branch showed ActionFailed when actually opened.
+            ("Give_requester_read", {**cond("@not(empty(body('Ensure_requester')?['Id']))", {
+                "Give_requester_read_do": sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)"),
+            }), "runAfter": ra("Ensure_requester", status=("Succeeded", "Failed"))}),
         ]))),
         ("Create_a_task", op("shared_planner", "CreateTask_V3", {
             "body/groupId": GROUP, "body/planId": PLAN,
@@ -988,12 +997,17 @@ def hd3():
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
         # requester photo for the card (Branthaven users only): 48x48 from Microsoft 365, embedded as a data URI.
         # Best effort - no photo, external sender or a Graph refusal just leaves the card without a picture.
+        # Get_photo 404s NotFound for a shared/resource mailbox (no O365 profile photo) - same shared-mailbox
+        # class as the Ensure_requester fix above, found 2026-11-09 the same way. Set_varPhoto now runs after
+        # either outcome and only reads body('Get_photo') on Succeeded, so the branch resolves clean instead
+        # of reporting ActionFailed while still leaving varPhoto blank exactly as the comment above intends.
         ("Init_varPhoto", {"type": "InitializeVariable", "inputs": {"variables": [{"name": "varPhoto", "type": "string", "value": ""}]}}),
         ("Requester_photo", cond("@outputs('IsInternal')", seq([
             ("Get_photo", op("shared_office365users", "HttpRequest", {"Method": "GET",
                 "Uri": "https://graph.microsoft.com/v1.0/users/@{outputs('ReqEmail')}/photos/48x48/$value"})),
             ("Set_varPhoto", {"type": "SetVariable", "inputs": {"name": "varPhoto",
-                "value": "@concat('data:image/jpeg;base64,',base64(body('Get_photo')))"}}),
+                "value": "@if(equals(actions('Get_photo')['status'],'Succeeded'),concat('data:image/jpeg;base64,',base64(body('Get_photo'))),'')"},
+                "runAfter": ra("Get_photo", status=("Succeeded", "Failed"))}),
         ]))),
         ("Card", {**compose(action_card(ID, t('Title'), "outputs('ReqEmail')", t('Category/Value'), t('Priority/Value'), t('Source/Value'),
             # pad before substring: a ticket with no Details (e.g. one created without that field) leaves
