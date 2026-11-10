@@ -23,17 +23,22 @@ Use the **IT Support** form link in the confirmation email or the Teams message.
 
 ## What happens after you send it
 
-1. **Confirmation** – you get an email and a Teams message from **IT Support** with your ticket number (IT-123).
-2. **Updates** – whenever IT changes the status you are told by email and in Teams.
-3. **Questions from IT** – if IT needs more information (status *Waiting for End User*), reply to the email or reply in the IT Support chat in Teams. Your reply goes straight to the ticket.
+**If you're a Branthaven employee** (reporting through Teams, the email mailbox, or the form, as yourself or on someone's behalf), everything below now happens **in Teams only** — no email. (Changed 2026-11-10.)
+**If you emailed in from outside Branthaven**, or your ticket was logged on behalf of a shared mailbox, you'll still get everything by **email** — Teams isn't available to you, so email stays the only channel.
+
+1. **Confirmation** – a message from **IT Support** with your ticket number (IT-123), by Teams (Branthaven employees) or email (everyone else).
+2. **Updates** – whenever IT changes the status you're told the same way.
+3. **Questions from IT** – if IT needs more information (status *Waiting for End User*), reply in the IT Support chat in Teams, or reply to the email if that's how you've been hearing from us. Your reply goes straight to the ticket.
 4. **Fixed?** – when IT thinks it's solved, the status becomes *Resolved Pending Confirmation*.
    - If it's fixed: nothing to do.
-   - If it's **not** fixed: reply to the email or Teams message within a day.
+   - If it's **not** fixed: reply in Teams (or reply to the email) within a day.
    - You get a reminder after 24 hours. The ticket closes automatically 48 hours after it was resolved.
+
+A reply **by email always works, for anyone**, even if you've been getting Teams messages — the mailbox is always open; just keep the ticket number (e.g. [IT-123]) in the subject.
 
 ## Issue came back after your ticket was resolved?
 
-Reply to the resolved ticket's email, or reply in the IT Support chat in Teams, either way. We'll start a fresh ticket for you and tag it to the original so IT has the history.
+Reply in the IT Support chat in Teams, or reply to the resolved ticket's email — either way. We'll start a fresh ticket for you and tag it to the original so IT has the history.
 
 ## Ticket statuses
 
@@ -50,12 +55,13 @@ Reply to the resolved ticket's email, or reply in the IT Support chat in Teams, 
 
 ## See your tickets
 
-Use **My tickets** (link in your emails) to see your own open tickets. You only ever see your own.
+Use **My tickets** (link in your Teams messages, or your emails if that's how you hear from us) to see your own open tickets. You only ever see your own.
 
 ## Tips
 
 - One problem per ticket. Use **Report a new issue** for a different problem.
 - Emergency (nobody can work)? Choose *I can't work at all* and also call or message IT directly.
-- Replies: keep the ticket number (e.g. [IT-123]) in the subject, and write above the line "## Reply above this line ##" if present.
+- Replying in Teams: just type in the IT Support chat, no ticket number needed.
+- Replying by email: keep the ticket number (e.g. [IT-123]) in the subject, and write above the line "## Reply above this line ##" if present.
 
 *Questions about this guide: IT Support.*
