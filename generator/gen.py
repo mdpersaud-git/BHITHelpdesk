@@ -985,9 +985,12 @@ def hd3():
             f"@and(greaterOrEquals(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),7),less(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),21))")),
         ("HoursLine", compose("@if(outputs('IsOpenNow'),'A technician will pick it up shortly.','Support hours are 7:00 am to 9:00 pm, every day. Your ticket will be actioned when support reopens at 7:00 am.')")),
         ("Tell_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
-            ("Send_confirmation_email", mail("@outputs('ReqEmail')",
-                f"[IT-@{{{ID}}}] We've got your request: @{{{t('Title')}}}",
-                CONFIRM_BODY.replace("§ID§", ID).replace("§T§", "triggerOutputs()?['body/"))),
+            # External/shared-mailbox requesters (no Teams identity) keep email; internal requesters get the
+            # Teams confirmation below only, since 2026-11-10 per Martin's request.
+            ("Send_confirmation_email", cond("@not(outputs('IsInternal'))", {
+                "Send_confirmation_email_do": mail("@outputs('ReqEmail')",
+                    f"[IT-@{{{ID}}}] We've got your request: @{{{t('Title')}}}",
+                    CONFIRM_BODY.replace("§ID§", ID).replace("§T§", "triggerOutputs()?['body/"))})),
             # skip the 1:1 chat when the requester IS the IT Support account itself (e.g. IT Support submits a
             # ticket for itself with no on-behalf picked): CreateChat 400s "Duplicate chat members" because the
             # Teams connection's own identity (shared_teams_1 = IT_Support@branthaven.com) is already one member
@@ -1000,7 +1003,7 @@ def hd3():
                         f"<p>Status: @{{if(empty(coalesce({t('AssignedTo/Email')},'')),'Open','Assigned')}} · Urgency: @{{{t('Priority/Value')}}}</p>"
                         "@{if(outputs('HasPic'),concat('<p><a href=\"',outputs('PicUrl'),'\">View image</a></p>'),'')}"
                         "<p>You'll get a message here and an email each time the status changes.</p>" + support_links(ID, t('Title')))}}),
-                "runAfter": ra("Send_confirmation_email", status=("Succeeded", "Failed"))}),
+                "runAfter": ra("Send_confirmation_email", status=("Succeeded", "Failed", "Skipped"))}),
         ]))),
         ("CreatedLine", compose(f"@concat('[',convertTimeZone(utcNow(),'UTC','{TZ}','yyyy-MM-dd HH:mm'),'] Ticket created from ',coalesce({t('Source/Value')},'IT'),' by ',outputs('ReqEmail'),decodeUriComponent('%0A%0A'),coalesce({t('Conversation')},''))")),
         # requester photo for the card (Branthaven users only): 48x48 from Microsoft 365, embedded as a data URI.
@@ -1064,7 +1067,7 @@ def hd3():
         # (e.g. the BadRequest "Duplicate chat members" case guarded against above) leaves the open_chat step
         # Failed but the PostMessage step that follows it Skipped - and Skipped reads as OK to this self-check's
         # problem filter, so without the open_chat leaf named here that class of failure went unreported.
-        leaf=("Send_confirmation_email", "Send_confirmation_chat_open_chat", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
+        leaf=("Send_confirmation_email_do", "Send_confirmation_chat_open_chat", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
 # ---------- HD4 Ticket updated ----------
@@ -1145,11 +1148,8 @@ def hd4():
         # excludes a tech being set at the same moment the ticket goes to Resolved/Closed, so this never fires
         # on a closing ticket. Deliberately does not also notify the outgoing tech - not asked for; add a
         # symmetric "Tell_old_tech"/"Email_old_tech" pair (keyed off LastNotifiedTech) if that's wanted too.
-        ("Email_new_tech", mail(f"@{t('AssignedTo/Email')}", f"[IT-@{{{ID}}}] Ticket assigned to you: @{{{t('Title')}}}",
-            style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p>"
-            f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
-            f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
-            f"<p>@{{{t('Title')}}}</p><p>{lnk}</p></div>", after=ra("Set_varConversation_assigned"))),
+        # Teams-only since 2026-11-10 per Martin's request (the assigned tech is always Branthaven IT staff,
+        # so Teams can always reach them - no fallback-to-email case here the way requester notifications need).
         ("Tell_new_tech", {**scope_msg("New_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
             f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
             f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
@@ -1162,16 +1162,20 @@ def hd4():
         ("NoteLine", compose(f"@concat('[',{stamp},' | ',{who},' (IT)] ',{t('NoteToUser')},decodeUriComponent('%0A%0A'),variables('varConversation'))")),
         ("Set_varConversation_note", {"type": "SetVariable", "inputs": {"name": "varConversation", "value": "@outputs('NoteLine')"}}),
         ("Send_note_on_its_own", cond(f"@equals({V},coalesce({t('LastNotifiedStatus')},''))", seq([
-            ("Email_the_note", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Update on your ticket: @{{{t('Title')}}}",
-                style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p><p>@{{{who}}} from IT wrote:</p><p>@{{{t('NoteToUser')}}}</p>"
-                + files_html +
-                f"<p>Reply to this email to answer.{portal_note}</p>" + details + earlier + "</div>")),
+            # External/shared-mailbox requesters (no Teams identity) keep email; internal requesters get the
+            # Teams chat below only, since 2026-11-10 per Martin's request to drop duplicate email wherever
+            # Teams can actually reach the requester.
+            ("Email_the_note", cond("@not(outputs('IsInternal'))", {
+                "Email_the_note_do": mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Update on your ticket: @{{{t('Title')}}}",
+                    style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p><p>@{{{who}}} from IT wrote:</p><p>@{{{t('NoteToUser')}}}</p>"
+                    + files_html +
+                    f"<p>Reply to this email to answer.{portal_note}</p>" + details + earlier + "</div>")})),
             ("Chat_the_note_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_the_note": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_note", "@outputs('ReqEmail')",
                         f"<p><b>IT-@{{{ID}}}: message from @{{{who}}}</b></p><p>@{{{t('NoteToUser')}}}</p>" + files_html
                         + f"<p style=\"color:#666\">@{{{t('Title')}}}</p>" + support_links(ID, t('Title')))}}),
-                "runAfter": ra("Email_the_note", status=("Succeeded", "Failed"))}),
+                "runAfter": ra("Email_the_note", status=("Succeeded", "Failed", "Skipped"))}),
             ("Note_in_channel", {**cond(f"@not(empty(coalesce({t('ChannelMessageId')},'')))", {
                 "Reply_note_in_channel": channel_reply(f"@{t('ChannelMessageId')}",
                     f"<p>Note to user from @{{{who}}}: @{{{t('NoteToUser')}}}</p>")}),
@@ -1193,11 +1197,13 @@ def hd4():
         ("StatusLine", compose(f"@concat('[',{stamp},' | ',{who},'] Status: ',{V},if(contains({arr([S_RES, S_CLOSED])},{V}),concat(' · Resolution: ',coalesce({t('Resolution')},'')),''),decodeUriComponent('%0A%0A'),variables('varConversation'))")),
         ("Set_varConversation_status", {"type": "SetVariable", "inputs": {"name": "varConversation", "value": "@outputs('StatusLine')"}}),
         ("Has_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
-            ("Email_status", mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{UV}}}: @{{{t('Title')}}}",
-                style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
-                f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{UV}}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
-                + resolution_html + note_html + status_files_html + extra_html +
-                portal_line + details + earlier + "</div>")),
+            # Same Teams-only-for-internal-requesters change as Email_the_note above.
+            ("Email_status", cond("@not(outputs('IsInternal'))", {
+                "Email_status_do": mail("@outputs('ReqEmail')", f"[IT-@{{{ID}}}] Ticket status: @{{{UV}}}: @{{{t('Title')}}}",
+                    style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p><p>Hi @{{{first}}},</p>"
+                    f"<p>The status of your ticket IT-@{{{ID}}} has changed to <b>@{{{UV}}}</b>@{{if(equals({V},'{S_CLOSED}'),'',concat(': ',outputs('Meanings')?[{V}]))}}.</p>"
+                    + resolution_html + note_html + status_files_html + extra_html +
+                    portal_line + details + earlier + "</div>")})),
             ("Chat_status_if_internal", {**if_internal("outputs('IsInternal')", {
                 "Chat_status": {"type": "Scope", "runAfter": {},
                     "actions": support_msg("Post_status", "@outputs('ReqEmail')",
@@ -1207,7 +1213,7 @@ def hd4():
                         resolution_html +
                         f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
                         + support_links(ID, t('Title')))}}),
-                "runAfter": ra("Email_status", status=("Succeeded", "Failed"))}),
+                "runAfter": ra("Email_status", status=("Succeeded", "Failed", "Skipped"))}),
         ]))),
         ("Question_missing", {**cond(f"@and(contains({arr([S_WAIT, S_SCHED])},{V}),empty(coalesce({t('NoteToUser')},'')))", {
             "Nudge_the_tech": scope_msg("Nudge_msg", f"@{{coalesce({t('Editor/Email')},'{ME}')}}",
@@ -1242,17 +1248,15 @@ def hd4():
     # widens the whole expression to Float and substring()'s length parameter rejects that - wrap in int(...)
     # (same fix HD20 needed for the identical bug on IT Projects, see its docstring).
     new_internal_text = f"substring(concat({_IN},' '),0,int(min({internal_len},max(0,sub({internal_len},coalesce({t('LastNotifiedInternalLen')},0))))))"
+    # Teams-only since 2026-11-10 per Martin's request: Martin and every assigned tech are always Branthaven IT
+    # staff, so Teams can always reach them - this was the only email in Part D (Email_internal_note), now removed.
     partD = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
         ("AssignedTechEmail", compose(f"@toLower(coalesce({t('AssignedTo/Email')},''))")),
-        ("Email_internal_note", mail(
-            f"@{{if(or(empty(outputs('AssignedTechEmail')),equals(outputs('AssignedTechEmail'),'{ME}')),'{ME}',concat('{ME}',';',outputs('AssignedTechEmail')))}}",
-            f"[IT-@{{{ID}}}] Internal note: @{{{t('Title')}}}",
-            style + f"<p style=\"color:#999;font-size:12px\">{MARKER}</p>@{{outputs('InternalLine')}}<p>{lnk}</p></div>")),
     ])
     partD["Tell_Martin_internal_note"] = {**scope_msg("Internal_note_martin_msg", ME,
         f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}"),
-        "runAfter": ra("Email_internal_note", status=("Succeeded", "Failed"))}
+        "runAfter": ra("AssignedTechEmail")}
     partD["Tell_assigned_tech_internal_note"] = {**cond(f"@and(not(empty(outputs('AssignedTechEmail'))),not(equals(outputs('AssignedTechEmail'),'{ME}')))", {
         "Tell_tech_internal_note": scope_msg("Internal_note_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
             f"<p><b>Internal note on IT-@{{{ID}}}: @{{{t('Title')}}}</b></p>@{{outputs('InternalLine')}}")}),
@@ -1281,6 +1285,22 @@ def hd4():
     ])), "runAfter": ra("Fallback_status")}
 
     actions = seq([
+        # Debounce: wait 5 minutes before sending anything, then confirm nothing edited the ticket again in
+        # the meantime (compare the item's live Modified stamp to this run's own trigger-time Modified) - if
+        # it has, a newer run is already queued up behind this one and will do its own 5-minute wait, so this
+        # run quietly exits without notifying anyone for a since-superseded edit. Added 2026-11-10 per
+        # Martin's request to avoid a burst of separate notifications when a ticket is edited more than once
+        # in quick succession; the survivor (the run whose own wait ends with no further edit in between)
+        # sends one notification reflecting the final state. Terminate here (same idiom as Self_assign_on_close's
+        # Stop_until_rerun below) adds no extra If/Switch/Foreach nesting to anything downstream - it's a
+        # sibling action, not a wrapper around the rest of the flow.
+        ("Wait_5_min", {"type": "Wait", "inputs": {"interval": {"count": 5, "unit": "Minute"}}}),
+        ("Get_fresh_item_HD4", {**sp("GetItem", {"id": f"@{ID}"}), "runAfter": ra("Wait_5_min")}),
+        ("Still_latest_edit", {**compose(f"@equals(body('Get_fresh_item_HD4')?['Modified'],{t('Modified')})"),
+                               "runAfter": ra("Get_fresh_item_HD4")}),
+        ("Stop_if_superseded", {**cond("@not(outputs('Still_latest_edit'))", {
+            "Stop_superseded_run": {"type": "Terminate", "inputs": {"runStatus": "Succeeded"}}}),
+            "runAfter": ra("Still_latest_edit")}),
         ("Init_varStatus", var("varStatus", "string", f"@{t('Status/Value')}")),
         ("Init_varConversation", var("varConversation", "string", f"@coalesce({t('Conversation')},'')")),
         ("Init_varFirstResponse", var("varFirstResponse", "string", f"@coalesce({t('FirstResponseOn')},'')")),
@@ -1406,8 +1426,8 @@ def hd4():
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}) was updated to <b>@{{{V}}}</b>"
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
-        leaf=("Email_status", "Post_status", "Email_the_note", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
-              "Email_new_tech", "New_tech_msg", "Email_internal_note", "Internal_note_martin_msg", "Internal_note_tech_msg")))
+        leaf=("Email_status_do", "Post_status", "Email_the_note_do", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
+              "New_tech_msg", "Internal_note_martin_msg", "Internal_note_tech_msg")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1465,12 +1485,11 @@ def hd6():
         ("Update_H", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/BusinessHoursOpen": "@outputs('H')", "item/SLAHours": "@outputs('S')"})),
         ("Unassigned_at_4_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),4))", {
             "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
-        # Since 2026-10-27, the 5-hour unassigned ping also goes by email (not just Teams) to Martin+Joseph,
-        # same as the daily unassigned reminder below, per Martin's request.
+        # Was both email and Teams to Martin+Joseph since 2026-10-27, per Martin's request at the time; dropped
+        # back to Teams-only on 2026-11-10 per his broader Teams-only-for-techs request (techs are always
+        # Branthaven IT staff, so Teams can always reach them).
         ("Unassigned_at_5_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),5))",
-            {**team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM),
-             "Email_unassigned_5h": mail(f"{ME};{TECH2}", f"[IT-@{{{ID}}}] Still unassigned after 5 hours",
-                 f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
+            team_msgs("Unassigned5h_msg", f"<p>IT-@{{{ID}}} is still unassigned after 5 hours: @{{{it('Title')}}}</p><p>{lnk}</p>", UNASSIGNED_PING_TEAM))),
         # Once it's assigned, this reminder goes to that tech alone, Teams only (since 2026-11-09 — the
         # duplicate email was dropped, and the cadence slowed to every 2 business days, per Martin's
         # feedback that the daily tech pings were too spammy; a tech working the ticket already sees it
@@ -1482,14 +1501,12 @@ def hd6():
             ("Tech_open_days_reminder", cond(f"@and(not(empty(coalesce({it('AssignedTo')}?['Email'],''))),equals(mod(outputs('S'),{2*DAY_H}),0))", {
                 "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{{it('AssignedTo')}?['Email']}}",
                     f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
-            ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))", {
-                "Open_days_msg_joseph": scope_msg("Open_days_joseph_msg", TECH2,
-                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>"),
-                "Email_open_days_unassigned": mail(f"{ME};{TECH2}",
-                    f"[IT-@{{{ID}}}] Still unassigned after @{{div(outputs('S'),{DAY_H})}} business day(s)",
-                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} business day(s) and is still unassigned: @{{{it('Title')}}}</p>"
-                    f"<p>Requested by @{{{req}}}</p><p>{lnk}</p>"),
-            })),
+            # Teams-only since 2026-11-10 (was email+Teams, but to a narrower audience - TECH2 only on Teams,
+            # ME+TECH2 on email); now pings both ME and TECH2 on Teams, same audience the email used to cover.
+            ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))",
+                team_msgs("Open_days_joseph_msg",
+                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>",
+                    UNASSIGNED_PING_TEAM))),
         ]))),
     ])
     for k in ("Unassigned_at_5_hours", "Open_a_full_business_day"):
@@ -1509,17 +1526,19 @@ def hd6():
             seq([
                 ("Update_W", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/WaitingHours": "@outputs('W')"})),
                 ("Daily_reminder", cond(f"@and(equals(mod(outputs('W'),{DAY_H}),0),not(empty({req})))", seq([
-                    ("Email_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: IT is waiting for your reply",
-                        f"<p>{MARKER}</p><p>IT is waiting for your reply on IT-@{{{ID}}}: @{{{it('Title')}}}</p>"
-                        # padded before substring - an empty Conversation (no history yet) would otherwise throw
-                        f"<pre>@{{substring(concat(coalesce({it('Conversation')},''),' '),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
-                        f"<p>Reply to this email to answer. The ticket will be marked Resolved after 5 days without a reply.</p>{rlnk}")),
+                    # Same Teams-only-for-internal-requesters change as HD4's Email_the_note/Email_status.
+                    ("Email_reminder", cond(f"@not({internal})", {
+                        "Email_reminder_do": mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: IT is waiting for your reply",
+                            f"<p>{MARKER}</p><p>IT is waiting for your reply on IT-@{{{ID}}}: @{{{it('Title')}}}</p>"
+                            # padded before substring - an empty Conversation (no history yet) would otherwise throw
+                            f"<pre>@{{substring(concat(coalesce({it('Conversation')},''),' '),0,min(length(coalesce({it('Conversation')},'')),1000))}}</pre>"
+                            f"<p>Reply to this email to answer. The ticket will be marked Resolved after 5 days without a reply.</p>{rlnk}")})),
                     ("Chat_reminder_if_internal", {**if_internal(internal, {
                         "Chat_reminder": {"type": "Scope", "runAfter": {},
                             "actions": support_msg("Post_reminder", f"@{req}",
                                 f"<p><b>Reminder: IT is waiting for your reply on IT-@{{{ID}}}</b></p><p>@{{{it('Title')}}}</p>"
                                 "<p>The ticket will be marked Resolved after 5 days without a reply.</p>" + support_links(ID, it('Title')))}}),
-                        "runAfter": ra("Email_reminder", status=("Succeeded", "Failed"))}),
+                        "runAfter": ra("Email_reminder", status=("Succeeded", "Failed", "Skipped"))}),
                     ("Tell_tech_waiting_reminder", scope_msg("Waiting_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                         f"<p>IT-@{{{ID}}} is still waiting on the requester after @{{div(outputs('W'),{DAY_H})}} business day(s): @{{{it('Title')}}}</p><p>{lnk}</p>")),
                 ]))),
@@ -1549,18 +1568,20 @@ def hd6():
             ])},
             {"Reminder_24h": cond(f"@and(greaterOrEquals(outputs('ResolvedAge'),24),lessOrEquals(int(coalesce({it('ResolvedHours')},0)),0),not(empty({req})))", seq([
                 ("Mark_reminded", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/ResolvedHours": 1})),
-                ("Email_resolved_reminder", mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: is your issue fixed? @{{{it('Title')}}}",
-                    f"<p>{MARKER}</p><p>IT marked ticket IT-@{{{ID}}} as resolved: @{{{it('Title')}}}</p>"
-                    f"<p><b>Resolution:</b> @{{coalesce({it('Resolution')},'')}}</p>"
-                    "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email"
-                    f"@{{if({internal},' or reply in the IT Support chat in Teams','')}} within the next day and your ticket will be reopened. Otherwise it will be marked Resolved automatically 48 hours after the fix was delivered.</p>"
-                    f"{rlnk}")),
+                # Same Teams-only-for-internal-requesters change as above.
+                ("Email_resolved_reminder", cond(f"@not({internal})", {
+                    "Email_resolved_reminder_do": mail(f"@{req}", f"[IT-@{{{ID}}}] Reminder: is your issue fixed? @{{{it('Title')}}}",
+                        f"<p>{MARKER}</p><p>IT marked ticket IT-@{{{ID}}} as resolved: @{{{it('Title')}}}</p>"
+                        f"<p><b>Resolution:</b> @{{coalesce({it('Resolution')},'')}}</p>"
+                        "<p>If it is fixed, you don't need to do anything. If it is not fixed, reply to this email"
+                        f"@{{if({internal},' or reply in the IT Support chat in Teams','')}} within the next day and your ticket will be reopened. Otherwise it will be marked Resolved automatically 48 hours after the fix was delivered.</p>"
+                        f"{rlnk}")})),
                 ("Chat_resolved_reminder_if_internal", {**if_internal(internal, {
                     "Chat_resolved_reminder": {"type": "Scope", "runAfter": {},
                         "actions": support_msg("Post_resolved_reminder", f"@{req}",
                             f"<p><b>Reminder: is IT-@{{{ID}}} fixed?</b></p><p>@{{{it('Title')}}}</p>"
                             "<p>If it is fixed, no action is needed. If not, reply in this chat or use Reply by email within the next day to reopen it. Otherwise it will be marked Resolved automatically after 48 hours.</p>" + support_links(ID, it('Title')))}}),
-                    "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed"))}),
+                    "runAfter": ra("Email_resolved_reminder", status=("Succeeded", "Failed", "Skipped"))}),
                 ("Tell_tech_resolved_reminder", scope_msg("ResolvedReminder_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                     f"<p>IT-@{{{ID}}} was marked resolved and the requester hasn't confirmed after 24 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")),
             ]))})),
