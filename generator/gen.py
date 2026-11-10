@@ -936,7 +936,15 @@ def hd3():
     ID = t('ID')
     actions = seq([
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
-        ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
+        # IsInternal requires the Person field to have actually resolved, not just a matching email domain -
+        # a shared/resource mailbox (e.g. creekviewadmin@branthaven.com via HD14's on-behalf manual-entry
+        # fallback) is on the Branthaven domain but was never given a Requester/Person value (Create_item_try's
+        # EnsureUser can't resolve it - see the Ensure_requester/Get_photo fixes above), so treating it as
+        # "internal" here sends it down the Confirm_in_Teams path below, which 400s CreateChat with "'user@
+        # odata.bind' field is missing in the request" - Graph has no real identity to open a chat with. Found
+        # 2026-11-10 via HD4's equivalent check and IT-127 (closed on behalf of this same shared mailbox),
+        # which would repeat this failure on every future status change - see hd4()'s identical fix below.
+        ("IsInternal", compose("@and(" + is_internal("outputs('ReqEmail')") + f",not(empty(coalesce({t('Requester/Email')},''))))")),
         ("Tag", compose(f"@concat('IT-',{ID})")),
         ("Get_owner_group", sp_http("GET", "_api/web/associatedownergroup")),
         ("Break_inheritance", sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)")),
@@ -1278,7 +1286,13 @@ def hd4():
         ("Init_varFirstResponse", var("varFirstResponse", "string", f"@coalesce({t('FirstResponseOn')},'')")),
         ("Tech", compose(f"@toLower(coalesce({t('AssignedTo/Email')},''))")),
         ("ReqEmail", compose(f"@toLower(coalesce({t('RequesterEmail')},{t('Requester/Email')},''))")),
-        ("IsInternal", compose("@" + is_internal("outputs('ReqEmail')"))),
+        # Same fix as hd3()'s IsInternal, same reason: a shared/resource mailbox requester (via HD14's
+        # on-behalf fallback) matches the Branthaven domain but has no resolved Person/Requester value, so
+        # treating it as "internal" sends it into Chat_status/Chat_the_note below, which 400s CreateChat with
+        # "'user@odata.bind' field is missing in the request" - found 2026-11-10 on IT-127 (requester
+        # creekviewadmin@branthaven.com), which repeats this failure on every future status/note update until
+        # fixed here.
+        ("IsInternal", compose("@and(" + is_internal("outputs('ReqEmail')") + f",not(empty(coalesce({t('Requester/Email')},''))))")),
         ("FirstName", compose(f"@first(split(trim(coalesce({t('Requester/DisplayName')},first(split(outputs('ReqEmail'),'@')),'there')),' '))")),
         # Fetched fresh (not from the trigger body) so a file attached separately from the edit that fired this
         # run still shows up: attaching a file doesn't itself touch Status/AssignedTo/NoteToUser, so by the time
