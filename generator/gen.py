@@ -110,15 +110,21 @@ SATISFACTION_CHOICES = [SAT_GOOD, SAT_NEUTRAL, SAT_POOR]
 # HD30 via PatchItem, so none of the "has to be checked in Edit columns" caveats for that convention apply here)
 #
 # HD30's "When an HTTP request is received" trigger generates its callback URL only once the flow is saved -
-# that URL can't be known before HD30 exists, so this is a placeholder. Two-phase rollout: 1) import HD30.zip
-# first and open its trigger to copy the real URL, 2) paste it in here replacing the placeholder, then
-# regenerate and re-import HD4.zip/HD6.zip (both reference SURVEY_URL) so the face links in the closing
-# notification actually point at the live flow.
-SURVEY_URL = "https://REPLACE-WITH-HD30-TRIGGER-URL-AFTER-IMPORT"
+# couldn't be known before HD30 existed, so this started as a placeholder (two-phase rollout: import HD30.zip
+# first, open its trigger, copy the real URL, paste it in here, regenerate and re-import HD4.zip/HD6.zip).
+# This is the real URL, captured 2026-11-12 after Martin imported and saved HD30 on IT_Support@branthaven.com
+# (Premium license). If HD30 is ever deleted and recreated, its trigger gets a brand-new URL/signature and
+# this constant - plus HD4.zip/HD6.zip - has to be regenerated and re-shipped the same way.
+SURVEY_URL = ("https://default26e851a05d3b468780a37d758c6fc2.b2.environment.api.powerplatform.com:443/"
+              "powerautomate/automations/direct/cu/12/workflows/d29305157eb846ddb6659b6e465f1ebe/triggers/manual/paths/invoke"
+              "?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=Jk-QN_hLtK01cK3Ezuai5lZefiBQg4Ix5h38WrzXmWk")
 
 def survey_link_expr(id_expr, rating, emoji):
     """WDL expression (no leading @) for one face link in the closing-ticket survey - see survey_expr()."""
-    return (f"concat('<a href=\"{SURVEY_URL}?id=',string({id_expr}),'&rating={rating}\" "
+    # SURVEY_URL is the raw "When an HTTP request is received" trigger URL, which already carries its own
+    # query string (api-version/sp/sv/sig - the SAS signature that makes it callable at all), so id/rating
+    # are appended with '&', never '?' (a second '?' would make the URL invalid).
+    return (f"concat('<a href=\"{SURVEY_URL}&id=',string({id_expr}),'&rating={rating}\" "
             f"style=\"text-decoration:none;font-size:26px;margin:0 8px\">{emoji}</a>')")
 
 def survey_expr(id_expr):
