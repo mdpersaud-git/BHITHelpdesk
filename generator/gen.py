@@ -100,6 +100,40 @@ MEANING = {
     S_SCHED: "IT Support has requested to schedule a meeting with you",
     S_RES: "IT Support has provided resolution and awaiting confirmation that issue has been resolved",
     S_CLOSED: "Ticket has been resolved and closed"}
+
+# ---------- satisfaction survey (added 2026-11-12, Martin: "add a brief survey on resolved ticket") ----------
+SAT_GOOD, SAT_NEUTRAL, SAT_POOR = "Good", "Neutral", "Poor"
+SATISFACTION_CHOICES = [SAT_GOOD, SAT_NEUTRAL, SAT_POOR]
+# keep in sync with: the Tickets list's SatisfactionRating choice column (created 2026-11-12,
+# ShowInDisplayForm/ShowInEditForm/ShowInNewForm/ShowInViewForms all FALSE - CLAUDE.md's non-hidden-but-off-
+# forms convention; it's never referenced by a Header/Body/Footer [$FieldName] token, only read/written by
+# HD30 via PatchItem, so none of the "has to be checked in Edit columns" caveats for that convention apply here)
+#
+# HD30's "When an HTTP request is received" trigger generates its callback URL only once the flow is saved -
+# that URL can't be known before HD30 exists, so this is a placeholder. Two-phase rollout: 1) import HD30.zip
+# first and open its trigger to copy the real URL, 2) paste it in here replacing the placeholder, then
+# regenerate and re-import HD4.zip/HD6.zip (both reference SURVEY_URL) so the face links in the closing
+# notification actually point at the live flow.
+SURVEY_URL = "https://REPLACE-WITH-HD30-TRIGGER-URL-AFTER-IMPORT"
+
+def survey_link_expr(id_expr, rating, emoji):
+    """WDL expression (no leading @) for one face link in the closing-ticket survey - see survey_expr()."""
+    return (f"concat('<a href=\"{SURVEY_URL}?id=',string({id_expr}),'&rating={rating}\" "
+            f"style=\"text-decoration:none;font-size:26px;margin:0 8px\">{emoji}</a>')")
+
+def survey_expr(id_expr):
+    """WDL expression (no leading @) for the 3-face satisfaction survey spliced into a ticket's final-
+    closing notification (HD4 Part C's Closed branch, and HD6's 48h silent auto-close). Plain emoji text
+    linking to HD30's anonymous HTTP trigger - no sign-in needed, so the same markup works in an email or a
+    Teams chat message, for internal and external requesters alike, with no hosted image to go stale or get
+    stripped by a mail client. Wrap in `@{{...}}` to splice into a literal HTML f-string, or use bare inside
+    another WDL expression (e.g. nested in an existing if(...))."""
+    faces = "concat(" + ",".join([
+        survey_link_expr(id_expr, SAT_GOOD, "\U0001F642"),
+        survey_link_expr(id_expr, SAT_NEUTRAL, "\U0001F610"),
+        survey_link_expr(id_expr, SAT_POOR, "\U0001F641"),
+    ]) + ")"
+    return f"concat('<p style=\"margin-top:14px\">How did we do? ',{faces},'</p>')"
 def arr(lst):
     return "createArray(" + ",".join("'" + x + "'" for x in lst) + ")"
 def bucket_expr(S):
@@ -475,7 +509,8 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None, photo=None, re
             *([{"type": "TextBlock", "text": "Image attached. Open the ticket to view it.", "weight": "Bolder", "color": "Accent", "wrap": True, "isVisible": pic}] if pic else []),
             {"type": "TextBlock", "text": "Status changes and history appear in the replies below.", "isSubtle": True, "size": "Small", "wrap": True}],
         "actions": [
-            {"type": "Action.Submit", "title": "Assign to me", "data": {"act": "assign", "ticket": tid}},
+            # "Assign to me" removed 2026-11-12 (Martin: not needed) - Start work still assigns the clicker
+            # to the ticket if it's unassigned, so a tech never needs a separate assign-only step.
             {"type": "Action.Submit", "title": "Start work", "data": {"act": "start", "ticket": tid}},
             {"type": "Action.ShowCard", "title": "Update status", "card": text_card(status_inputs, "status")},
             {"type": "Action.ShowCard", "title": "Note to user", "card": text_card(
@@ -1186,9 +1221,10 @@ def hd4():
     # Part C: the status changed
     note_html = f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
     resolution_html = f"@{{if(and(contains({arr([S_RES, S_CLOSED])},{V}),not(empty(coalesce({t('Resolution')},'')))),concat('<p><b>Resolution:</b> ',{t('Resolution')},'</p>'),'')}}"
+    # Satisfaction survey (added 2026-11-12) rides along on the Closed branch only - see survey_expr().
     extra_html = (f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, reply to this email within 2 days and your ticket will be reopened.</p>',"
                   f"if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please reply to this email to respond to IT.</p>',"
-                  f"if(equals({V},'{S_CLOSED}'),'<p>To raise this again, reply to this email or log a new ticket.</p>','')))}}")
+                  f"if(equals({V},'{S_CLOSED}'),concat('<p>To raise this again, reply to this email or log a new ticket.</p>',{survey_expr(ID)}),'')))}}")
     partC = seq([
         ("Has_task_C", cond(hasTask, {"Move_Planner_task": op("shared_planner", "UpdateTask_V3", {
             "id": f"@{t('PlannerTaskId')}", "body/bucketId": "@" + bucket_expr(V),
@@ -1211,7 +1247,7 @@ def hd4():
                         f"@{{if(empty(coalesce({t('NoteToUser')},'')),'',concat('<p><b>Message from IT:</b> ',{t('NoteToUser')},'</p>'))}}"
                         + status_files_html +
                         resolution_html +
-                        f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',''))}}"
+                        f"@{{if(equals({V},'{S_RES}'),'<p>If this is not fixed, use Reply by email within 2 days and your ticket will be reopened.</p>',if(contains({arr([S_WAIT, S_SCHED])},{V}),'<p>Please use Reply by email to respond to IT.</p>',if(equals({V},'{S_CLOSED}'),{survey_expr(ID)},'')))}}"
                         + support_links(ID, t('Title')))}}),
                 "runAfter": ra("Email_status", status=("Succeeded", "Failed", "Skipped"))}),
         ]))),
@@ -1565,6 +1601,23 @@ def hd6():
                     "runAfter": ra("Done_in_Planner", status=("Succeeded", "Failed", "Skipped"))}),
                 ("Tell_tech_auto_closed", scope_msg("AutoClosed_tech_msg", f"@{{coalesce({it('AssignedTo')}?['Email'],'{ME}')}}",
                     f"<p>IT-@{{{ID}}} was closed automatically 48 hours after resolution (no reply from the requester): @{{{it('Title')}}}</p><p>{lnk}</p>")),
+                # Satisfaction survey (added 2026-11-12): the only requester-facing message this silent
+                # auto-close path sends - everything else about the close itself was already said in the
+                # 24h "is it fixed?" reminder, so this is deliberately brief (status line + the 3 faces).
+                ("Tell_requester_closed", cond(f"@not(empty({req}))", seq([
+                    ("Email_requester_closed", cond(f"@not({internal})", {
+                        "Email_requester_closed_do": mail(f"@{req}", f"[IT-@{{{ID}}}] Ticket closed: @{{{it('Title')}}}",
+                            f"<p>{MARKER}</p><p>Your ticket IT-@{{{ID}}} is now <b>Resolved</b> (closed automatically 48 hours "
+                            f"after the fix, with no reply): @{{{it('Title')}}}</p><p>To raise this again, reply to this email "
+                            f"or log a new ticket.</p>@{{{survey_expr(ID)}}}{rlnk}")})),
+                    ("Chat_requester_closed_if_internal", {**if_internal(internal, {
+                        "Chat_requester_closed": {"type": "Scope", "runAfter": {},
+                            "actions": support_msg("Post_requester_closed", f"@{req}",
+                                f"<p><b>IT-@{{{ID}}} is now Resolved</b> (closed automatically 48 hours after the fix, with no reply)</p>"
+                                f"<p style=\"color:#666\">@{{{it('Title')}}}</p><p>To raise this again, reply in this chat or log a new ticket.</p>"
+                                f"@{{{survey_expr(ID)}}}" + support_links(ID, it('Title')))}}),
+                        "runAfter": ra("Email_requester_closed", status=("Succeeded", "Failed", "Skipped"))}),
+                ]))),
             ])},
             {"Reminder_24h": cond(f"@and(greaterOrEquals(outputs('ResolvedAge'),24),lessOrEquals(int(coalesce({it('ResolvedHours')},0)),0),not(empty({req})))", seq([
                 ("Mark_reminded", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/ResolvedHours": 1})),
@@ -1851,9 +1904,8 @@ def hd9():
         ("Text", compose(f"@trim(coalesce({data}?['note_text'],{data}?['status_text'],''))")),
         ("Get_item", sp("GetItem", {"id": "@outputs('TicketId')"})),
         ("Switch", {"type": "Switch", "expression": "@outputs('Act')", "cases": {
-            "Case_assign": {"case": "assign", "actions": {"Assign": sp("PatchItem", {
-                "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
-                "item/AssignedTo/Claims": "@outputs('Responder')"})}},
+            # Case_assign ("Assign to me") removed 2026-11-12 along with its card button - "start" already
+            # assigns the clicker when the ticket is unassigned (see Case_start below).
             "Case_start": {"case": "start", "actions": {"Start": sp("PatchItem", {
                 "id": "@outputs('TicketId')", "item/Title": "@body('Get_item')?['Title']",
                 "item/AssignedTo/Claims": "@coalesce(body('Get_item')?['AssignedTo']?['Email'],outputs('Responder'))",
@@ -2659,6 +2711,9 @@ FLOW_DESCRIPTIONS = {
     "HD28 Project digest report": "Runs weekly, Monday at 8am: emails Martin only a digest of every active "
         "project (Status/Priority/Owner/Target Date/% Complete) and, under each one, a table of its own "
         "Project Tasks (Title/Status/Assigned To/Due Date).",
+    "HD30 Satisfaction survey": "Anonymous HTTP trigger - records a requester's click on one of the 3 face "
+        "links (Good/Neutral/Poor) in a closed ticket's closing notification. Not user-facing on its own; "
+        "nothing to run manually here.",
 }
 
 def hd16():
@@ -4294,6 +4349,38 @@ def hd28():
         "schedule": {"weekDays": ["Monday"], "hours": ["8"], "minutes": [0]}}}
     return "HD28 Project digest report", {"Recurrence": weekly_trig}, actions
 
+# ---------- HD30 Satisfaction survey ----------
+def hd30():
+    """Records a click on one of the 3 face links in a ticket's closing notification (see survey_expr() and
+    the note above SURVEY_URL) - a plain anonymous HTTP GET, so it works whether the click comes from the
+    Teams chat (internal requesters) or the plain email (external/shared-mailbox requesters), signed in or
+    not. Kept deliberately separate from everything else: a broken link here can't take down a ticket flow,
+    and the only side effect of a failed run is one un-recorded rating. Not in EXPECTED_FLOWS and no
+    self_check - low enough stakes that a health-panel slot and Martin-alert for it would be noise."""
+    trig = {"manual": {"type": "Request", "kind": "Http", "inputs": {"method": "GET", "schema": {}}}}
+    Q = "triggerOutputs()?['queries']"
+    thanks_page = ("<html><body style=\"font-family:'Segoe UI',Arial,sans-serif;text-align:center;padding:60px 20px\">"
+                   "<h2>Thanks for the feedback!</h2><p>Your response on IT-@{outputs('TicketId')} has been recorded.</p>"
+                   "</body></html>")
+    bad_page = ("<html><body style=\"font-family:'Segoe UI',Arial,sans-serif;text-align:center;padding:60px 20px\">"
+                "<h2>That link has expired or is invalid.</h2></body></html>")
+    actions = seq([
+        ("TicketId", compose(f"@int(coalesce({Q}?['id'],'0'))")),
+        ("Rating", compose(f"@coalesce({Q}?['rating'],'')")),
+        ("Is_valid", compose(f"@and(greater(outputs('TicketId'),0),contains({arr(SATISFACTION_CHOICES)},outputs('Rating')))")),
+        ("Handle", cond("@outputs('Is_valid')", seq([
+            ("Get_item_survey", sp("GetItem", {"id": "@outputs('TicketId')"})),
+            ("Record_rating", sp("PatchItem", {"id": "@outputs('TicketId')", "item/Title": "@body('Get_item_survey')?['Title']",
+                "item/SatisfactionRating": "@outputs('Rating')"})),
+            ("Say_thanks", {"type": "Response", "kind": "Http", "runAfter": ra("Record_rating"),
+                "inputs": {"statusCode": 200, "headers": {"Content-Type": "text/html"}, "body": thanks_page}}),
+        ]), {
+            "Say_invalid": {"type": "Response", "kind": "Http",
+                "inputs": {"statusCode": 400, "headers": {"Content-Type": "text/html"}, "body": bad_page}},
+        })),
+    ])
+    return "HD30 Satisfaction survey", trig, actions
+
 def write_package(flows, zip_path, pkg_name):
     tmp = zip_path + "_dir"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -4353,7 +4440,7 @@ def write_package(flows, zip_path, pkg_name):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27(), hd28(), hd29()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
+    flows = [hd1(), hd2(), hd3(), hd4(), hd5(), hd6(), hd7(), hd8(), hd9(), hd11(), hd12(), hd13(), hd14(), hd15(), hd16(), hd17(), hd18(), hd19(), hd20(), hd21(), hd22(), hd23(), hd24(), hd25(), hd26(), hd27(), hd28(), hd29(), hd30()]   # HD10 retired: questions now go out as IT Support messages and replies come back via HD12
     for f in flows:
         safe = f[0].split()[0]
         write_package([f], os.path.join(OUT, f"{safe}.zip"), f[0])
