@@ -33,7 +33,6 @@ Use the **IT Support** form link in the confirmation email or the Teams message.
    - If it's fixed: nothing to do.
    - If it's **not** fixed: reply in Teams (or reply to the email) within a day.
    - You get a reminder after 24 hours. The ticket closes automatically 48 hours after it was resolved.
-5. **Done** – once your ticket is closed, that final message ends with "How did we do?" and three faces (🙂 😐 ☹️). Click whichever matches — it takes one click, no sign-in, and there's nothing else to fill in. (Added 2026-11-12.)
 
 A reply **by email always works, for anyone**, even if you've been getting Teams messages — the mailbox is always open; just keep the ticket number (e.g. [IT-123]) in the subject.
 
