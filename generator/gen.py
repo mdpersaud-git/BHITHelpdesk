@@ -208,6 +208,22 @@ def chat(to, msg, after=None):
               {"poster": "Flow bot", "location": "Chat with Flow bot", "body/recipient": to, "body/messageBody": msg}, after)
 
 SUPPORT = "IT_Support@branthaven.com"
+# IT_Support's own AAD/SharePoint-resolved "Email" attribute is literally missing the underscore - a
+# different string than the real mailbox address (SUPPORT, above) everyone actually mails/messages. A
+# Person field (e.g. Tickets.AssignedTo) that resolves to the IT_Support account surfaces THIS spelling,
+# not SUPPORT, so a guard built only from SUPPORT.lower() won't catch it. Confirmed live 2026-11-13 via
+# SharePoint REST on IT-136/IT-139: AssignedTo.EMail == "ITSupport@branthaven.com" (no underscore).
+SUPPORT_RESOLVED_EMAIL = "itsupport@branthaven.com"
+
+def not_support_identity(email_expr):
+    """True unless `email_expr` (already a string expression, not toLower'd) resolves to the IT_Support
+    account under either spelling - the real mailbox (SUPPORT) or its malformed AAD Email attribute
+    (SUPPORT_RESOLVED_EMAIL). Use before opening a 1:1 Teams chat with whoever that email belongs to:
+    CreateChat 400s "Duplicate chat members" / "'user@odata.bind' field is missing" when the Teams
+    connection's own identity (shared_teams_1 = IT_Support) is - or can't resolve as distinct from -
+    the other party. Same root cause as the existing Requester-is-IT_Support guards (hd3's
+    Confirm_in_Teams_if_internal, HD27/HD29's clicker_ok); this is the AssignedTo-side equivalent."""
+    return f"and(not(equals(toLower({email_expr}),'{SUPPORT.lower()}')),not(equals(toLower({email_expr}),'{SUPPORT_RESOLVED_EMAIL}')))"
 
 def scope_msg(prefix, to, html):
     return {"type": "Scope", "runAfter": {}, "actions": support_msg(prefix, to, html)}
@@ -1191,10 +1207,19 @@ def hd4():
         # symmetric "Tell_old_tech"/"Email_old_tech" pair (keyed off LastNotifiedTech) if that's wanted too.
         # Teams-only since 2026-11-10 per Martin's request (the assigned tech is always Branthaven IT staff,
         # so Teams can always reach them - no fallback-to-email case here the way requester notifications need).
-        ("Tell_new_tech", {**scope_msg("New_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
-            f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
-            f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
-            f"<p>@{{{t('Title')}}}</p><p>{lnk}</p>"),
+        # Guarded (added 2026-11-13) against AssignedTo resolving to the IT_Support account itself - found
+        # live on IT-136/IT-139 (Martin self-assigned while his session was actually signed in as IT_Support):
+        # CreateChat 400'd "'user@odata.bind' field is missing in the request" because the Teams connection's
+        # own identity (shared_teams_1 = IT_Support) can't open a chat keyed off its own malformed resolved
+        # email. See not_support_identity()'s docstring. Skips the ping entirely in that case rather than
+        # crashing the scope - there's no one else to notify (the ticket is, in effect, assigned to IT_Support
+        # as a team, not a person), and this is the same "skip, don't crash" choice already made for the
+        # analogous Requester-is-IT_Support cases elsewhere.
+        ("Tell_new_tech", {**cond(f"@{not_support_identity(t('AssignedTo/Email'))}",
+            {"New_tech_chat": scope_msg("New_tech_msg", f"@{{{t('AssignedTo/Email')}}}",
+                f"<p>IT-@{{{ID}}} has been assigned to you by @{{{who}}}.</p>"
+                f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
+                f"<p>@{{{t('Title')}}}</p><p>{lnk}</p>")}),
             "runAfter": ra("Set_varConversation_assigned")}),
     ])
 
