@@ -134,7 +134,13 @@ def survey_expr(id_expr):
     Teams chat message, for internal and external requesters alike, with no hosted image to go stale or get
     stripped by a mail client. Wrap in `@{{...}}` to splice into a literal HTML f-string, or use bare inside
     another WDL expression (e.g. nested in an existing if(...))."""
-    faces = "concat(" + ",".join([
+    # Teams' chat-message HTML renderer only honors a small CSS subset and was seen (live, 2026-11-13,
+    # IT-141's closing message) to collapse the <a> links' `margin:0 8px` down to almost nothing - the three
+    # faces render nearly touching. margin on an inline link isn't reliable there, so don't depend on it alone:
+    # splice literal spacing (3 nbsp) between the links as a separator that always renders regardless of what
+    # CSS the host strips. Keep the per-link margin too (still helps in email clients, which do respect it).
+    SEP = "'&#160;&#160;&#160;'"
+    faces = "concat(" + f",{SEP},".join([
         survey_link_expr(id_expr, SAT_GOOD, "\U0001F642"),
         survey_link_expr(id_expr, SAT_NEUTRAL, "\U0001F610"),
         survey_link_expr(id_expr, SAT_POOR, "\U0001F641"),
