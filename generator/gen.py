@@ -1018,7 +1018,20 @@ def hd3():
             # doesn't fail this whole branch (and with it this whole ticket-creation run) - found 2026-11-09
             # via the HD14 shared-mailbox-fallback full-circle test: "Succeeded" at the top, self-check clean,
             # but this branch showed ActionFailed when actually opened.
-            ("Give_requester_read", {**cond("@not(empty(body('Ensure_requester')?['Id']))", {
+            # Guard fixed again 2026-11-13: `empty()` only accepts an object/array/string, and `Id` is a
+            # SharePoint Integer - so the guard above threw InvalidTemplate ("expects its parameter to be an
+            # object, an array or a string... provided value is of type 'Integer'") on every run where
+            # Ensure_requester actually SUCCEEDED (a real resolvable requester - i.e. almost every real
+            # ticket), the exact opposite of the one case (a shared mailbox, where Ensure_requester always
+            # FAILED and 'Id' was genuinely absent) this guard was built and live-tested against. Found via
+            # IT-141's full-circle test (identity-clean, requester Martin - a real resolvable account):
+            # top-level run still read "Succeeded", self-check stayed silent (Has_requester isn't in HD3's
+            # self_check scoped/leaf list), but opening the run showed Give_requester_read ActionFailed - so
+            # this has been silently failing for every normal (non-shared-mailbox) ticket since 2026-11-09,
+            # and no real requester has had Read on their own ticket item since. `greater(...,0)` never calls
+            # `empty()` on an Integer at all, so it works for both outcomes: Id present (a positive number) or
+            # absent (coalesced to 0).
+            ("Give_requester_read", {**cond("@greater(coalesce(body('Ensure_requester')?['Id'],0),0)", {
                 "Give_requester_read_do": sp_http("POST", f"_api/web/lists(guid'{TICKETS}')/items(@{{{ID}}})/roleassignments/addroleassignment(principalid=@{{body('Ensure_requester')?['Id']}},roledefid=1073741826)"),
             }), "runAfter": ra("Ensure_requester", status=("Succeeded", "Failed"))}),
         ]))),
@@ -1116,7 +1129,7 @@ def hd3():
     # Monitoring: did the requester confirmation, Planner task, channel post and tech ping all go out?
     no_channel = ("if(empty(body('Post_to_Help_Desk_channel')?['id']),"
                   "createArray(json('{\"name\":\"Post_to_Help_Desk_channel\",\"status\":\"Failed\"}')),json('[]'))")
-    actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket"],
+    actions.update(self_check("Health", ["Tell_requester", "Planner_task", "Tell_IT_new_ticket", "Has_requester"],
         f"[Help desk health] Notification problem on new ticket IT-@{{{ID}}}",
         f"Ticket <b>IT-@{{{ID}}}</b> (@{{{t('Title')}}}, requester @{{outputs('ReqEmail')}}) was created, but these steps did not complete:",
         f"concat('IT-',{ID},' (created)')", extra=no_channel,
@@ -1124,6 +1137,10 @@ def hd3():
         # (e.g. the BadRequest "Duplicate chat members" case guarded against above) leaves the open_chat step
         # Failed but the PostMessage step that follows it Skipped - and Skipped reads as OK to this self-check's
         # problem filter, so without the open_chat leaf named here that class of failure went unreported.
+        # Has_requester added to `scoped` 2026-11-13: it wraps Ensure_requester and the Give_requester_read
+        # guard (itself an If, so its own status already reflects Give_requester_read_do's success/failure -
+        # no extra leaf= needed), closing the exact monitoring gap that let the empty()-on-Integer bug above
+        # fail silently on every real ticket since 2026-11-09 with self_check staying clean.
         leaf=("Send_confirmation_email_do", "Send_confirmation_chat_open_chat", "Send_confirmation_chat", "Create_a_task", "Post_to_Help_Desk_channel"), after=ra("Tell_IT_new_ticket", status=ANY3)))
     return "HD3 Ticket created", {"When_an_item_is_created": sp_trigger("GetOnNewItems")}, actions
 
