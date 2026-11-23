@@ -3267,10 +3267,22 @@ def hd20():
     tell_cond = lambda who: ("@and(not(empty(outputs('" + who + "'))),not(equals(outputs('" + who + "'),'" + ME
                               + "')),") + is_internal("outputs('" + who + "')") + ")"
 
+    # Who actually made this change, for display in the notification itself - not just the generic "IT Support
+    # [Branthaven]" sender. Editor is SharePoint's own Modified-By person field, so a direct edit in the list
+    # (e.g. Martin closing a project via Edit all) correctly names the real editor. A note added via a reply to
+    # a project email/Teams chat is instead patched by a flow running as the IT_Support service account, so
+    # Editor there would just say "IT Support" - but that path already stamps "[date | Sender]" into the note
+    # text itself (see SponsorUpdates writes above), so this line is suppressed in that case rather than showing
+    # a redundant/uninformative "Updated by IT Support" (same it_support-exclusion convention HD8's LASTTECH uses).
+    updated_by_expr = (f"if(and(not(empty(coalesce({pt('Editor/Email')},''))),"
+                        f"not(contains(toLower(coalesce({pt('Editor/Email')},'')),'it_support'))),"
+                        f"concat('<p style=\"color:#888;font-size:12px;margin:4px 0 0\">Updated by ',"
+                        f"coalesce({pt('Editor/DisplayName')},{pt('Editor/Email')}),'</p>'),'')")
     sponsor_branch = seq([
         ("StatusLine", compose(f"@if({status_changed},concat('<p><b>Status changed to: ',{V},'</b></p>'),'')")),
         ("NoteLine", {**compose(f"@if({sponsor_changed},concat('<p>',{new_sponsor_text},'</p>'),'')"), "runAfter": ra("StatusLine")}),
-        ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("NoteLine")}),
+        ("UpdatedByLine", {**compose(f"@{updated_by_expr}"), "runAfter": ra("NoteLine")}),
+        ("CreatorEmail", {**compose(f"@toLower(coalesce({pt('Author/Email')},''))"), "runAfter": ra("UpdatedByLine")}),
         ("Sponsor_emails_select", {**people_select("Sponsor_emails_select", pt('ProjectSponsor'), "Email")["Sponsor_emails_select"], "runAfter": ra("CreatorEmail")}),
         ("SponsorEmails", {**compose(f"@{join_emails('Sponsor_emails_select', pt('SponsorEmail'))}"), "runAfter": ra("Sponsor_emails_select")}),
         ("Owner_emails_select_su", {**people_select("Owner_emails_select_su", pt('Owner'), "Email")["Owner_emails_select_su"], "runAfter": ra("SponsorEmails")}),
@@ -3281,40 +3293,41 @@ def hd20():
             "runAfter": ra("OwnerEmails_su")}),
         ("Email_sponsor_update", {**mail("@outputs('Recipients')", f"[PRJ-@{{{ID}}}] Update on project: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
-            f"<p>{MARKER}</p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"
+            f"<p>{MARKER}</p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}@{{outputs('UpdatedByLine')}}"
             f"<p>Reply to this email to add a note.</p><p><a href=\"{PRJ_ITEM_URL}@{{{ID}}}\">View this project</a></p></div>"),
             "runAfter": ra("Recipients")}),
         ("Martin_sponsor_update", {**scope_msg("Martin_sponsor_update_msg", ME,
-            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}"),
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}@{{outputs('UpdatedByLine')}}"),
             "runAfter": ra("Email_sponsor_update", status=("Succeeded", "Failed"))}),
         ("Tell_creator_sponsor_update", {**cond(tell_cond("CreatorEmail"),
             {"Creator_sponsor_update": scope_msg("Creator_sponsor_update_msg", "@outputs('CreatorEmail')",
-                f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}")}),
+                f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}@{{outputs('UpdatedByLine')}}")}),
             "runAfter": ra("Martin_sponsor_update", status=("Succeeded", "Failed"))}),
         ("Tell_sponsors_update", {**notify_each("Tell_sponsors_update", "outputs('SponsorEmails')",
-            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}",
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}@{{outputs('UpdatedByLine')}}",
             exclude=["outputs('CreatorEmail')"])["Tell_sponsors_update"],
             "runAfter": ra("Tell_creator_sponsor_update", status=("Succeeded", "Failed"))}),
         ("Tell_owners_sponsor_update", {**notify_each("Tell_owners_sponsor_update", "outputs('OwnerEmails_su')",
-            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}",
+            f"<p><b>PRJ-@{{{ID}}} updated: @{{{pt('Title')}}}</b></p>@{{outputs('StatusLine')}}@{{outputs('NoteLine')}}@{{outputs('UpdatedByLine')}}",
             exclude=["outputs('CreatorEmail')"])["Tell_owners_sponsor_update"],
             "runAfter": ra("Tell_sponsors_update", status=("Succeeded", "Failed"))}),
     ])
     internal_branch = seq([
         ("InternalLine", compose(f"@concat('<p>',{new_internal_text},'</p>')")),
-        ("Owner_emails_select", {**people_select("Owner_emails_select", pt('Owner'), "Email")["Owner_emails_select"], "runAfter": ra("InternalLine")}),
+        ("UpdatedByLine_internal", {**compose(f"@{updated_by_expr}"), "runAfter": ra("InternalLine")}),
+        ("Owner_emails_select", {**people_select("Owner_emails_select", pt('Owner'), "Email")["Owner_emails_select"], "runAfter": ra("UpdatedByLine_internal")}),
         ("OwnerEmails", {**compose(f"@{join_emails('Owner_emails_select')}"), "runAfter": ra("Owner_emails_select")}),
         ("Email_internal_update", {**mail(
             "@join(union(createArray('" + ME + "'),split(outputs('OwnerEmails'),';')),';')",
             f"[PRJ-@{{{ID}}}] Internal note: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
-            f"<p>{MARKER}</p>@{{outputs('InternalLine')}}<p><a href=\"{PRJ_LIST_URL}@{{{ID}}}\">View in Full Detail</a></p></div>"),
+            f"<p>{MARKER}</p>@{{outputs('InternalLine')}}@{{outputs('UpdatedByLine_internal')}}<p><a href=\"{PRJ_LIST_URL}@{{{ID}}}\">View in Full Detail</a></p></div>"),
             "runAfter": ra("OwnerEmails")}),
         ("Martin_internal_update", {**scope_msg("Martin_internal_update_msg", ME,
-            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}"),
+            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}@{{outputs('UpdatedByLine_internal')}}"),
             "runAfter": ra("Email_internal_update", status=("Succeeded", "Failed"))}),
         ("Tell_owners_internal_update", {**notify_each("Tell_owners_internal_update", "outputs('OwnerEmails')",
-            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}")["Tell_owners_internal_update"],
+            f"<p><b>Internal note on PRJ-@{{{ID}}}: @{{{pt('Title')}}}</b></p>@{{outputs('InternalLine')}}@{{outputs('UpdatedByLine_internal')}}")["Tell_owners_internal_update"],
             "runAfter": ra("Martin_internal_update", status=("Succeeded", "Failed"))}),
     ])
     actions = seq([
