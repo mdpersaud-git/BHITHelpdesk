@@ -35,7 +35,8 @@ PT_STATUSES = ["Not Started", "In Progress", "Completed"]
 #   Title, ProjectID (Number), Assigned_x0020_To (Person), Status (Choice), Due_x0020_Date (DateTime, DateOnly),
 #   Notes (Note), LastNotifiedStatus (Text), LastNotifiedAssignee (Text), LastNotifiedNotes (Text, added 2026-10-30 -
 #   same no-Show*Form-restriction pattern as its two siblings, a plain bookkeeping field HD24/HD25 stamp/compare,
-#   see hd25()'s docstring for why Notes needed one of these too)
+#   see hd25()'s docstring for why Notes needed one of these too; also stamped by HD1's task_reply_branch as of
+#   2026-11-25 to pre-suppress HD25's broadcast for an acknowledgment-only reply - see that branch's comments)
 # IT Projects columns added alongside this feature: Task_x0020_Progress (Text, e.g. "60% (3 of 5 Tasks)" or "100% (1 of 1 Task)") and
 # TaskDetails (Multiple lines of text, RichText="TRUE" as of 2026-10-31 - a bullet-per-task list, each title
 # a clickable link to that task's own DispForm via TASK_ITEM_URL - shown as a normal field on the project
@@ -911,14 +912,33 @@ def hd1():
                        "contains(toLower(outputs('TskReplyText')),'done'),"
                        "contains(toLower(outputs('TskReplyText')),'finished'))")
     new_task_status = f"if({tsk_complete_kw},'Completed',coalesce({gt}?['Status']?['Value'],'Not Started'))"
+    # Acknowledgment-only replies ("Thanks Martin" etc - added 2026-11-25 after Natalie Duda's thank-you reply
+    # re-broadcast her task to Joseph + the rest of the project team exactly like a substantive update would)
+    # don't deserve HD25's full owner/team broadcast. Only a non-completion reply whose TEXT itself opens with
+    # a plain thank-you/ack phrase counts - a signature block below it (e.g. "Thanks Martin, Natalie Rose
+    # Duda...") is NOT stripped from TskReplyText the way a quoted-thread marker is, so this checks the START
+    # of the text, not its overall length; a short-but-substantive reply like "not fixed yet" still broadcasts
+    # normally. The note is still appended to Notes and the sender still gets their private Thank_task_reply
+    # confirmation either way - only the team broadcast is skipped, done by pre-stamping LastNotifiedNotes to
+    # match the new Notes value so HD25's own notes_changed trigger check sees nothing changed and never runs.
+    tsk_ack_kw = ("or(startsWith(toLower(trim(outputs('TskReplyText'))),'thanks'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'thank you'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'thx'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'ok'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'okay'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'got it'),"
+                  "startsWith(toLower(trim(outputs('TskReplyText'))),'sounds good'))")
+    tsk_ack_only = f"and(not({tsk_complete_kw}),{tsk_ack_kw})"
     PID_t = f"{gt}?['ProjectID']"
     task_reply_yes = seq([
         ("NewTaskNotes", compose(f"@{new_task_notes}")),
         ("NewTaskStatus", {**compose(f"@{new_task_status}"), "runAfter": ra("NewTaskNotes")}),
+        ("TaskAckOnly", {**compose(f"@{tsk_ack_only}"), "runAfter": ra("NewTaskStatus")}),
         ("Update_task_from_reply", {**spt("PatchItem", {
             "id": "@outputs('TskId')", "item/Title": f"@{gt}?['Title']",
-            "item/Status/Value": "@outputs('NewTaskStatus')", "item/Notes": "@outputs('NewTaskNotes')"}),
-            "runAfter": ra("NewTaskStatus")}),
+            "item/Status/Value": "@outputs('NewTaskStatus')", "item/Notes": "@outputs('NewTaskNotes')",
+            "item/LastNotifiedNotes": f"@if(outputs('TaskAckOnly'),outputs('NewTaskNotes'),coalesce({gt}?['LastNotifiedNotes'],''))"}),
+            "runAfter": ra("TaskAckOnly")}),
         # Confirms back to the sender, the task-level equivalent of Thank_sponsor_email above - until this,
         # someone replying to a task email (unlike every other reply path in the system) got no acknowledgment
         # their note/completion was received at all.
