@@ -11,6 +11,13 @@ PROJECTS = "3de1b401-4cac-4994-9c43-0d7cdd464b47"   # "IT Projects" list, added 
 PRJ_LIST_URL = SITE + "/Lists/IT%20Projects/Full%20Detail.aspx?FilterField1=ID&FilterValue1="   # tech view
 PRJ_ITEM_URL = SITE + "/Lists/IT%20Projects/DispForm.aspx?ID="   # read-only item page (also used by the sponsor for now)
 TASK_ITEM_URL = SITE + "/Lists/Project%20Tasks/DispForm.aspx?ID="   # read-only item page for a single Project Tasks row -
+# Shown on assignee-facing task notifications (added 2026-11-25, see HD1's task_reply_branch) - a reply is
+# logged on the task's Notes, and a reply that says the work is done ("complete"/"done"/"finished") also marks
+# the task Completed. This is the self-service path for a task assigned to someone outside IT, who has no
+# SharePoint edit access to Project Tasks at all (see "Project Tasks" permissions in docs/IT-Tech-Guide.md) and
+# so no other way to close out their own task - found 2026-11-25 when Natalie Duda had to ask Martin to close
+# an overdue task on her behalf because she had no way to do it herself.
+TASK_REPLY_HINT = "Reply to this email with a note, or say it's done and I'll mark it complete."
 COMPLETE_BANNER_EMAIL = "<div style=\"background:#fff8e6;color:#7a5a00;border:1px solid #f1d27a;border-radius:6px;padding:8px 12px;font-size:12.5px;font-weight:600;margin:0 0 14px\">&#8505;&#65039; FOR YOUR INFORMATION ONLY &mdash; NO REPLY NEEDED</div>"
 COMPLETE_BANNER_TEAMS = "<p><i>&#8505;&#65039; For your information only &mdash; no reply needed</i></p>"
 # assignee-facing task emails link here (by the task's own ID, not ProjectID) so a tech can go straight from the
@@ -871,6 +878,75 @@ def hd1():
     ])
     project_reply_branch["Project_found_and_authorized"]["runAfter"] = ra("Get_project", status=("Succeeded", "Failed"))
 
+    # A reply to a [TSK-n] task notification (HD24/HD25/HD26's "Open this task... or reply to this email") -
+    # added 2026-11-25 after Natalie Duda (a non-IT task assignee, no SharePoint edit access to Project Tasks -
+    # see "Project Tasks" permissions in docs/IT-Tech-Guide.md) emailed IT_Support/Joseph/Martin asking someone
+    # to mark her overdue task complete for her, since she had no way to do it herself. Checked BEFORE the
+    # project-reply branch below: a task notification's subject carries both '[PRJ-n]' AND '[TSK-m]' (added to
+    # HD24/HD25/HD26's subjects the same day), so without this check first, every task reply would be
+    # swallowed by the '[PRJ-' branch instead and logged as a project-level Sponsor Update, never touching the
+    # task itself. Authorized senders: the task's own Assigned To person (the actual point of this feature),
+    # the parent project's Owner(s)/creator, or Martin - same layered-authorization shape prj_auth uses above.
+    # The reply text is always appended to the task's Notes (dated, same convention as HD29's "Update task"
+    # button); additionally, if the reply text contains a completion word ("complete"/"done"/"finished",
+    # case-insensitive - a plain keyword scan, not sentiment analysis, so a reply like "not quite done yet"
+    # will still be read as completing it - good enough for the common case this exists for, revisit if it
+    # misfires in practice), Status is set to Completed too. Either way this only ever PatchItems the task -
+    # it deliberately does NOT send the completion/notes-refresh broadcast itself, the same way a SponsorUpdates
+    # reply's PatchItem lets HD20 do the project-level broadcast rather than HD1 doing it twice: this PatchItem's
+    # Status/Notes change is exactly what HD25's own trigger condition watches for, so HD25 fires right after on
+    # its own and handles telling owners/sponsors/creator/the assignee.
+    gt, gtp = "body('Get_task')", "body('Get_task_project')"
+    owner_arr_t = gtp + "?['Owner']"
+    tsk_auth = (f"or(equals({sender},toLower(coalesce({gt}?['Assigned_x0020_To']?['Email'],''))),"
+                f"{people_contains(owner_arr_t, sender)},"
+                f"equals({sender},toLower(coalesce({gtp}?['Author']?['Email'],''))),"
+                f"equals({sender},'{ME}'))")
+    tsk_today = "convertFromUtc(utcNow(),'Eastern Standard Time','MMM d')"
+    new_task_notes = (
+        f"if(empty(coalesce({gt}?['Notes'],'')),"
+        f"concat({tsk_today},' | ',outputs('Sender'),': ',outputs('TskReplyText')),"
+        f"concat({gt}?['Notes'],decodeUriComponent('%0A'),{tsk_today},' | ',outputs('Sender'),': ',outputs('TskReplyText')))")
+    tsk_complete_kw = ("or(contains(toLower(outputs('TskReplyText')),'complete'),"
+                       "contains(toLower(outputs('TskReplyText')),'done'),"
+                       "contains(toLower(outputs('TskReplyText')),'finished'))")
+    new_task_status = f"if({tsk_complete_kw},'Completed',coalesce({gt}?['Status']?['Value'],'Not Started'))"
+    PID_t = f"{gt}?['ProjectID']"
+    task_reply_yes = seq([
+        ("NewTaskNotes", compose(f"@{new_task_notes}")),
+        ("NewTaskStatus", {**compose(f"@{new_task_status}"), "runAfter": ra("NewTaskNotes")}),
+        ("Update_task_from_reply", {**spt("PatchItem", {
+            "id": "@outputs('TskId')", "item/Title": f"@{gt}?['Title']",
+            "item/Status/Value": "@outputs('NewTaskStatus')", "item/Notes": "@outputs('NewTaskNotes')"}),
+            "runAfter": ra("NewTaskStatus")}),
+        # Confirms back to the sender, the task-level equivalent of Thank_sponsor_email above - until this,
+        # someone replying to a task email (unlike every other reply path in the system) got no acknowledgment
+        # their note/completion was received at all.
+        ("Thank_task_reply", {**mail("@outputs('Sender')",
+            f"[PRJ-@{{{PID_t}}} / TSK-@{{outputs('TskId')}}] Update added: @{{{gt}?['Title']}}",
+            "<p>Thanks - @{if(equals(outputs('NewTaskStatus'),'Completed'),'this task has been marked complete.','your note was added to this task.')}</p>"
+            f"<p><b>TASK:</b> @{{{gt}?['Title']}}</p>"),
+            "runAfter": ra("Update_task_from_reply")}),
+    ])
+    task_reply_notfound = {
+        "Alert_bad_task_reply": {**mail(ME, "[Help desk health] Unmatched task reply",
+            f"<p>A reply naming TSK-@{{outputs('TskId')}} from @{{outputs('Sender')}} couldn't be matched to a "
+            f"task they're allowed to update (the task's assignee, the project's owner/creator, or you). Subject: @{{{T}}}</p>"
+            f"<p>@{{outputs('TskReplyText')}}</p>"), "runAfter": {}},
+        "Alert_bad_task_reply_teams": {"type": "Scope", "runAfter": ra("Alert_bad_task_reply", status=("Succeeded", "Failed")),
+            "actions": support_msg("Alert_bad_task_reply_dm", ME,
+                f"<p>A reply naming TSK-@{{outputs('TskId')}} from @{{outputs('Sender')}} couldn't be auto-matched to a task. Check email for details.</p>")},
+    }
+    task_reply_branch = seq([
+        ("TskId", compose(f"@if(contains(coalesce({T},''),'[TSK-'),int(first(split(last(split({T},'[TSK-')),']'))),outputs('TskRefNum'))")),
+        ("TskReplyText", compose("@" + clean_text(f"first(split(first(split(outputs('BodyText'),'{MARKER}')),'From: '))"))),
+        ("Get_task", spt("GetItem", {"id": "@outputs('TskId')"})),
+        ("Get_task_project", {**spp("GetItem", {"id": f"@{gt}?['ProjectID']"}), "runAfter": ra("Get_task", status=("Succeeded", "Failed"))}),
+        ("Task_found_and_authorized", {**cond(
+            f"@and(not(empty(string(coalesce({gt}?['ID'],'')))),{tsk_auth})",
+            task_reply_yes, task_reply_notfound), "runAfter": ra("Get_task_project", status=("Succeeded", "Failed"))}),
+    ])
+
     actions = seq([
         ("Sender", compose("@toLower(trim(coalesce(triggerOutputs()?['body/from'],'')))")),
         ("SenderDomain", compose("@last(split(outputs('Sender'),'@'))")),
@@ -947,9 +1023,21 @@ def hd1():
                            "if(not(contains('0123456789',substring(outputs('PrjRefPart'),2,1))),2,"
                            "if(not(contains('0123456789',substring(outputs('PrjRefPart'),3,1))),3,"
                            "if(not(contains('0123456789',substring(outputs('PrjRefPart'),4,1))),4,5)))))))")),
-        ("Is_project_or_ticket_reply", cond(
-            f"@or(contains(coalesce({T},''),'[PRJ-'),greater(outputs('PrjRefNum'),0))", project_reply_branch,
-            {"Is_it_a_reply": cond(f"@or(contains(coalesce({T},''),'[IT-'),greater(outputs('RefNum'),0))", reply_branch, new_branch)})),
+        # same safety net, for a reply that names a task instead of a project or ticket
+        ("TskRefPart", compose(f"@concat(coalesce(split(toUpper(concat(coalesce({T},''),' ',coalesce(body('Html_to_text'),''))),'TSK-')?[1],''),'     ')")),
+        ("TskRefNum", compose("@if(not(contains('0123456789',substring(outputs('TskRefPart'),0,1))),0,"
+                           "int(substring(outputs('TskRefPart'),0,if(not(contains('0123456789',substring(outputs('TskRefPart'),1,1))),1,"
+                           "if(not(contains('0123456789',substring(outputs('TskRefPart'),2,1))),2,"
+                           "if(not(contains('0123456789',substring(outputs('TskRefPart'),3,1))),3,"
+                           "if(not(contains('0123456789',substring(outputs('TskRefPart'),4,1))),4,5)))))))")),
+        # Checked ahead of the project/ticket dispatch below: a task notification's subject carries both
+        # '[PRJ-n]' and '[TSK-m]' (see task_reply_branch's comment above), so a task reply must be pulled out
+        # here first or it would fall into the '[PRJ-' branch and get logged as a project-level note instead.
+        ("Is_task_reply", cond(
+            f"@or(contains(coalesce({T},''),'[TSK-'),greater(outputs('TskRefNum'),0))", task_reply_branch,
+            {"Is_project_or_ticket_reply": cond(
+                f"@or(contains(coalesce({T},''),'[PRJ-'),greater(outputs('PrjRefNum'),0))", project_reply_branch,
+                {"Is_it_a_reply": cond(f"@or(contains(coalesce({T},''),'[IT-'),greater(outputs('RefNum'),0))", reply_branch, new_branch)})})),
         ("Move_to_Processed", move(F_PROCESSED)),
     ])
     trigger = {"When_a_new_email_arrives_in_a_shared_mailbox_(V2)": {
@@ -3613,13 +3701,14 @@ def hd24():
         ("CreatorEmail", {**compose("@toLower(coalesce(body('Get_project')?['Author']?['Email'],''))"), "runAfter": ra("OwnerEmails")}),
         ("ProjectTitle", {**compose("@coalesce(body('Get_project')?['Title'],'')"), "runAfter": ra("CreatorEmail")}),
         ("Email_assignee", {**mail("@outputs('AssigneeEmail')",
-            f"[PRJ-@{{{PID}}}] New task: @{{{pt('Title')}}}",
+            f"[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] New task: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>You've been assigned a task on project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}</p>"
             f"<p>@{{coalesce({pt('Notes')},'')}}</p>"
-            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
-            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>"
+            f"<p>{TASK_REPLY_HINT}</p></div>"),
             "runAfter": ra("ProjectTitle")}),
         ("Tell_assignee", {**cond(tell_cond("AssigneeEmail"),
             {"Assignee_new_task": scope_msg("Assignee_new_task_msg", "@outputs('AssigneeEmail')",
@@ -3630,7 +3719,7 @@ def hd24():
             "union(createArray('" + ME + "'),split(outputs('OwnerEmails'),';'))),';')"),
             "runAfter": ra("Tell_assignee", status=("Succeeded", "Failed"))}),
         ("Email_owners", {**mail("@outputs('Recipients')",
-            f"[PRJ-@{{{PID}}}] Task assigned: @{{{pt('Title')}}}",
+            f"[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] Task assigned: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>A new task was added to project PRJ-@{{{PID}}}: @{{outputs('ProjectTitle')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}{due_line}<br><b>ASSIGNED TO:</b> @{{{AsName}}}</p>"
@@ -3738,12 +3827,13 @@ def hd25():
     reassign_branch = seq([
         ("AssigneeEmail_ra", compose(f"@{AsEmail}")),
         ("Email_new_assignee", {**mail("@outputs('AssigneeEmail_ra')",
-            f"[PRJ-@{{{PID}}}] Task reassigned to you: @{{{pt('Title')}}}",
+            f"[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] Task reassigned to you: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"<p>You've been assigned a task on project PRJ-@{{{PID}}}.</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>"
-            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
-            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p></div>"),
+            f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> &middot; "
+            f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>"
+            f"<p>{TASK_REPLY_HINT}</p></div>"),
             "runAfter": ra("AssigneeEmail_ra")}),
         ("Tell_new_assignee", {**cond(tell_cond("AssigneeEmail_ra"),
             {"New_assignee_msg": scope_msg("New_assignee_msg_s", "@outputs('AssigneeEmail_ra')",
@@ -3768,7 +3858,7 @@ def hd25():
         # unassigned test task; pre-existing, not caused by that day's other HD25 changes.
         ("Email_assignee_done", {**cond("@not(empty(outputs('AssigneeEmail_co')))",
             {"Email_assignee_done_send": mail("@outputs('AssigneeEmail_co')",
-            f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
+            f"[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"{COMPLETE_BANNER_EMAIL}<p>Marked complete: @{{{pt('Title')}}} on project PRJ-@{{{PID}}}.</p>@{{outputs('NoteLine_co')}}</div>")}),
             "runAfter": ra("AssigneeEmail_co")}),
@@ -3795,7 +3885,7 @@ def hd25():
             "union(createArray('" + ME + "'),split(outputs('StakeholderEmails_co'),';'))),';')"),
             "runAfter": ra("StakeholderEmails_co")}),
         ("Email_owners_done", {**mail("@outputs('Recipients_co')",
-            f"[PRJ-@{{{PID}}}] Task completed: @{{{pt('Title')}}}",
+            f"[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] Task completed: @{{{pt('Title')}}}",
             "<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#333\">"
             f"{COMPLETE_BANNER_EMAIL}<p>@{{{AsName}}} completed a task on project PRJ-@{{{PID}}}: @{{coalesce(body('Get_project')?['Title'],'')}}</p>"
             f"<p><b>TASK:</b> @{{{pt('Title')}}}</p>@{{outputs('NoteLine_co')}}"
@@ -3898,8 +3988,9 @@ def hd26():
                     f" (last touched @{{formatDateTime({it('Modified')},'MMMM d')}}).</p>"
                     f"<p>Assigned to: @{{coalesce({it('Assigned_x0020_To')}?['DisplayName'],'Unassigned')}}</p>"
                     f"{esc_tok3}"
-                    f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> (mark it complete here) &middot; "
-                    f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>")
+                    f"<p><a href=\"{TASK_ITEM_URL}@{{{ID}}}\">Open this task</a> &middot; "
+                    f"<a href=\"{PRJ_ITEM_URL}@{{{PID}}}\">View the project</a></p>"
+                    f"<p>{TASK_REPLY_HINT}</p>")
     send_actions = seq([
         ("Owner_emails_select_t", people_select("Owner_emails_select_t", "body('Get_task_project')?['Owner']", "Email")["Owner_emails_select_t"]),
         ("OwnerEmails_t", {**compose(f"@{join_emails('Owner_emails_select_t')}"), "runAfter": ra("Owner_emails_select_t")}),
@@ -3910,7 +4001,7 @@ def hd26():
             "union(createArray('" + ME + "'),split(outputs('OwnerEmails_t'),';')))),';')"),
             "runAfter": ra("CreatorEmail_t")}),
         ("Email_overdue", {**mail("@outputs('Recipients_t')",
-            f"@{{outputs('EscalationPrefix')}}[PRJ-@{{{PID}}}] Task overdue: @{{{it('Title')}}}", overdue_body),
+            f"@{{outputs('EscalationPrefix')}}[PRJ-@{{{PID}}} / TSK-@{{{ID}}}] Task overdue: @{{{it('Title')}}}", overdue_body),
             "runAfter": ra("Recipients_t")}),
         ("Martin_overdue", {**scope_msg("Martin_overdue_msg", ME, overdue_body),
             "runAfter": ra("Email_overdue", status=("Succeeded", "Failed"))}),

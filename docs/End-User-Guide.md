@@ -58,6 +58,15 @@ Reply in the IT Support chat in Teams, or reply to the resolved ticket's email �
 
 Use **My tickets** (link in your Teams messages, or your emails if that's how you hear from us) to see your own open tickets. You only ever see your own.
 
+## If you've been assigned a project task
+
+Sometimes IT is running a bigger project (a rollout, a system change) and asks you to do one piece of it — you'll get an email with a subject like **[PRJ-21 / TSK-7] New task: ...**. You don't have access to edit anything in SharePoint yourself, so to update it:
+
+- **Just reply to the task email.** Whatever you write is added as a note on the task.
+- **If the work is done, say so in your reply** (e.g. "done", "this is complete") and the task is marked complete automatically — no need to ask IT to close it for you.
+
+You'll get a short confirmation either way. If IT nudges you about an overdue task, the same thing applies: reply to that email instead of the original one, and it's logged the same way.
+
 ## Tips
 
 - One problem per ticket. Use **Report a new issue** for a different problem.
