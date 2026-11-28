@@ -1988,7 +1988,7 @@ def hd8():
                rpt_listbody("Filter_unassigned", rpt_th("Ticket", " width=\"60\"") + rpt_th("Requester") + rpt_th("Summary") + rpt_th("Hours", " width=\"50\""), "Table_unassigned", "Nothing unassigned"))
         + rpt_card("Waiting on users", "#7c3aed", "#ede9fe", "#5b21b6", "@{length(body('Filter_waiting'))}",
                rpt_listbody("Filter_waiting", rpt_th("Ticket", " width=\"60\"") + rpt_th("Requester") + rpt_th("Summary") + rpt_th("Status") + rpt_th("Assigned / last touched by") + rpt_th("Days waiting", " width=\"70\""), "Table_waiting", "Nobody is waiting"))
-        + rpt_card("Open IT tickets by technician", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('OpenNow')?['value'])}",
+        + rpt_card("Open IT tickets by assignee", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('OpenNow')?['value'])}",
                "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("IT Support") + rpt_th("Workload", " width=\"220\"") + rpt_th("Open", " width=\"45\"") + rpt_th("Overdue", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
         + rpt_card("Today's tickets by category", "#0d9488", "#ccfbf1", "#0f766e", "@{length(body('Opened')?['value'])}",
                "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("Category") + rpt_th("Share", " width=\"220\"") + rpt_th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
@@ -2752,7 +2752,7 @@ def tech_sla():
             "avg": f"@{avg}"})
     acts.append(("Tech_rows", compose(rows)))
     acts.append(("Tech_ranked", compose("@sort(outputs('Tech_rows'),'key')")))
-    item = {"id": DASH_TECHSLA, "item/Title": "TechSLA", "item/Sub": "Service levels by technician, last 30 days",
+    item = {"id": DASH_TECHSLA, "item/Title": "TechSLA", "item/Sub": "Service levels by assignee, last 30 days",
             "item/Refreshed": f"@{nowET('h:mm tt')}"}
     for i in range(len(TECHS)):
         r = f"outputs('Tech_ranked')?[{i}]"
@@ -3644,7 +3644,7 @@ def hd23():
         "<tr>" + tiles + "</tr>"
         "</table></td></tr>"
         "<tr><td>"
-        + rpt_card("Closed tickets by technician", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('ResolvedMonth')?['value'])}",
+        + rpt_card("Closed tickets by assignee", "#4338ca", "#eef0fd", "#4338ca", "@{length(body('ResolvedMonth')?['value'])}",
                "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("IT Support") + rpt_th("Share", " width=\"220\"") + rpt_th("Closed", " width=\"55\"") + "</tr>@{join(body('Table_by_tech'),'')}</table>")
         + rpt_card("Opened tickets by category", "#0d9488", "#ccfbf1", "#0f766e", "@{length(body('OpenedMonth')?['value'])}",
                "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse\"><tr>" + rpt_th("Category") + rpt_th("Share", " width=\"220\"") + rpt_th("Tickets", " width=\"55\"") + "</tr>@{join(body('Table_by_category'),'')}</table>")
