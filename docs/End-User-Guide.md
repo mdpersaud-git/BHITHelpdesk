@@ -46,7 +46,7 @@ Reply in the IT Support chat in Teams, or reply to the resolved ticket's email â
 | Status | What it means |
 |---|---|
 | Open | We've received your ticket |
-| Assigned | A technician has been given your ticket |
+| Assigned | IT Support has been given your ticket |
 | In Progress | IT has started working on it |
 | Escalated or Waiting Internally | IT has asked another team for help |
 | Waiting for End User | IT needs information from you |

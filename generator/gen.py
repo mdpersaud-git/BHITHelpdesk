@@ -101,7 +101,7 @@ STATUSES = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC, S_WAIT, S_SCHED, S_RES, S_CLOSED]
 WORKING = [S_OPEN, S_ASSIGNED, S_PROG, S_ESC]          # SLA clock runs
 MEANING = {
     S_OPEN: "Status on newly created Ticket",
-    S_ASSIGNED: "Ticket has been re-assigned to an IT Team Member",
+    S_ASSIGNED: "Ticket has been assigned to IT Support",
     S_PROG: "IT Support has begun work on the Ticket",
     S_ESC: "IT Support has reached out for assistance from an internal team",
     S_WAIT: "IT Support has requested further information from you",
@@ -677,7 +677,7 @@ PORTAL_URL = SITE + "/Lists/Tickets/My%20tickets.aspx"
 _TD = 'style="border:1px solid #000;padding:6px 8px;font-family:Segoe UI,Arial,sans-serif;font-size:14px"'
 _TH = 'style="border:1px solid #000;padding:6px 8px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;font-weight:bold;text-align:center"'
 _ROWS = [("Open", "Status on newly created Ticket"),
-         ("Assigned", "Ticket has been re-assigned to an IT Team Member"),
+         ("Assigned", "Ticket has been assigned to IT Support"),
          ("In Progress", "IT Support has begun work on the Ticket"),
          ("Escalated or Waiting Internally", "IT Support has reached out for assistance from an internal team"),
          ("Waiting for End User", "IT Support has requested further information from you"),
@@ -1167,7 +1167,7 @@ def hd3():
         ("PicUrl", compose("@if(outputs('HasPic'),concat('https://branthavenhomes.sharepoint.com',coalesce(first(body('Get_attachments')?['value'])?['ServerRelativeUrl'],'')),'')")),
         ("IsOpenNow", compose(
             f"@and(greaterOrEquals(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),7),less(int(convertTimeZone(utcNow(),'UTC','{TZ}','HH')),21))")),
-        ("HoursLine", compose("@if(outputs('IsOpenNow'),'A technician will pick it up shortly.','Support hours are 7:00 am to 9:00 pm, every day. Your ticket will be actioned when support reopens at 7:00 am.')")),
+        ("HoursLine", compose("@if(outputs('IsOpenNow'),'IT Support will pick it up shortly.','Support hours are 7:00 am to 9:00 pm, every day. Your ticket will be actioned when support reopens at 7:00 am.')")),
         ("Tell_requester", cond("@not(empty(outputs('ReqEmail')))", seq([
             # External/shared-mailbox requesters (no Teams identity) keep email; internal requesters get the
             # Teams confirmation below only, since 2026-11-10 per Martin's request.
@@ -1334,10 +1334,9 @@ def hd4():
         # have Planner notifications turned on in Outlook/Teams - i.e. often not at all. Fires on every
         # assignment (first-time or reassignment) that reaches Part_B_tech_assigned - that condition already
         # excludes a tech being set at the same moment the ticket goes to Resolved/Closed, so this never fires
-        # on a closing ticket. Deliberately does not also notify the outgoing tech - not asked for; add a
-        # symmetric "Tell_old_tech"/"Email_old_tech" pair (keyed off LastNotifiedTech) if that's wanted too.
-        # Teams-only since 2026-11-10 per Martin's request (the assigned tech is always Branthaven IT staff,
-        # so Teams can always reach them - no fallback-to-email case here the way requester notifications need).
+        # on a closing ticket. Teams-only since 2026-11-10 per Martin's request (the assigned tech is always
+        # Branthaven IT staff, so Teams can always reach them - no fallback-to-email case here the way
+        # requester notifications need).
         # Guarded (added 2026-11-13) against AssignedTo resolving to the IT_Support account itself - found
         # live on IT-136/IT-139 (Martin self-assigned while his session was actually signed in as IT_Support):
         # CreateChat 400'd "'user@odata.bind' field is missing in the request" because the Teams connection's
@@ -1352,6 +1351,19 @@ def hd4():
                 f"<p><b>Requester:</b> @{{outputs('ReqEmail')}}<br><b>Priority:</b> @{{{t('Priority/Value')}}}</p>"
                 f"<p>@{{{t('Title')}}}</p><p>{lnk}</p>")}),
             "runAfter": ra("Set_varConversation_assigned")}),
+        # Added 2026-11-28: the OUTGOING tech, previously told nothing at all when a ticket was taken off them
+        # (the gap called out in Tell_new_tech's comment above) - a tech could otherwise keep believing a
+        # ticket is still theirs and keep working it after it's been handed to someone else. Fires only on a
+        # genuine reassignment (a previous tech existed AND it's a different person than the new one, not the
+        # first-ever assignment, which has no LastNotifiedTech yet) and skips the IT_Support identity the same
+        # way Tell_new_tech does. Deliberately does not fire when the ticket is simply being unassigned back to
+        # nobody - that case has no "new tech" to announce and isn't what this gap was about.
+        ("Tell_old_tech", {**cond(
+            f"@and(not(empty(coalesce({t('LastNotifiedTech')},''))),not(equals(coalesce({t('LastNotifiedTech')},''),outputs('Tech'))),{not_support_identity(t('LastNotifiedTech'))})",
+            {"Old_tech_chat": scope_msg("Old_tech_msg", f"@{{coalesce({t('LastNotifiedTech')},'')}}",
+                f"<p>IT-@{{{ID}}} has been reassigned from you to @{{{t('AssignedTo/DisplayName')}}}.</p>"
+                f"<p>@{{{t('Title')}}}</p><p>{lnk}</p>")}),
+            "runAfter": ra("Tell_new_tech", status=("Succeeded", "Failed", "Skipped"))}),
     ])
 
     # Part A: a note for the user. Logged always; sent on its own only when the status is not changing
@@ -1625,7 +1637,7 @@ def hd4():
         f" (assignee @{{coalesce({t('AssignedTo/DisplayName')},'none')}}, requester @{{outputs('ReqEmail')}}), but these steps did not complete:",
         f"concat('IT-',{ID},' (updated)')", after=ra("Write_SLA_figures", status=ALL),
         leaf=("Email_status_do", "Post_status", "Email_the_note_do", "Post_note", "Post_new_tech", "Move_Planner_task", "Update_task_notes",
-              "New_tech_msg", "Internal_note_martin_msg", "Internal_note_tech_msg")))
+              "New_tech_msg", "Old_tech_msg", "Internal_note_martin_msg", "Internal_note_tech_msg")))
     trig = sp_trigger("GetOnUpdatedItems")
     trig["conditions"] = [{"expression":
         "@or(not(equals(triggerOutputs()?['body/Status/Value'],triggerOutputs()?['body/LastNotifiedStatus'])),"
@@ -1699,6 +1711,18 @@ def hd6():
             ("Tech_open_days_reminder", cond(f"@and(not(empty(coalesce({it('AssignedTo')}?['Email'],''))),equals(mod(outputs('S'),{2*DAY_H}),0))", {
                 "Tell_tech_open_days": scope_msg("Open_days_msg", f"@{{{it('AssignedTo')}?['Email']}}",
                     f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s): @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>")})),
+            # Added 2026-11-28: a ticket that stays assigned but stalls had no escalation at all - only the
+            # same one tech got the every-2-day nudge above, forever, with nobody else ever told (unlike an
+            # unassigned ticket, which already escalates to Martin+Joseph below). Once an assigned/working
+            # ticket has been open 3 full business days, Martin+Joseph get looped in too (alongside, not
+            # instead of, the tech's own reminder), repeating every business day after that - same
+            # UNASSIGNED_PING_TEAM audience the unassigned-ticket escalation already uses, so there's one
+            # consistent answer for "who gets told when a ticket is stuck."
+            ("Escalate_stuck_assigned", cond(
+                f"@and(not(empty(coalesce({it('AssignedTo')}?['Email'],''))),greaterOrEquals(div(outputs('S'),{DAY_H}),3))",
+                team_msgs("StuckAssigned_msg",
+                    f"<p>IT-@{{{ID}}} has been open @{{div(outputs('S'),{DAY_H})}} day(s), still with @{{coalesce({it('AssignedTo')}?['DisplayName'],'')}}: @{{{it('Title')}}}, requested by @{{{req}}}</p><p>{lnk}</p>",
+                    UNASSIGNED_PING_TEAM))),
             # Teams-only since 2026-11-10 (was email+Teams, but to a narrower audience - TECH2 only on Teams,
             # ME+TECH2 on email); now pings both ME and TECH2 on Teams, same audience the email used to cover.
             ("Tell_Joseph_if_still_unassigned", cond(f"@empty(coalesce({it('AssignedTo')}?['Email'],''))",
@@ -3044,7 +3068,17 @@ def hd16():
         ("StuckResolved_lines", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']",
             "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (resolved ',formatDateTime({it('ResolvedOn')},'yyyy-MM-dd'),', still not closed)'")}}),
         ("StuckResolved_ids", {"type": "Select", "inputs": {"from": "@body('StuckResolved')?['value']", "select": f"@concat('IT-',{it('ID')})"}}),
-        ("ClockBad", compose("@or(outputs('ClockStalled'),greater(length(body('StuckResolved')?['value']),0))")),
+        # Added 2026-11-28: a 9th health card - an assigned/working ticket open 3+ business days (same
+        # threshold as HD6's new Escalate_stuck_assigned) was previously only visible as a 1:1 Teams ping to
+        # the one assigned tech, with no rollup anywhere Martin would see it without being told - unlike
+        # StuckResolved just above, which already has one. Filters the "Working" list already fetched above
+        # (client-side, via a Query action) rather than a second GetItems call against the list.
+        ("StuckAssigned", {"type": "Query", "inputs": {"from": "@body('Working')?['value']",
+            "where": f"@and(not(empty(coalesce({it('AssignedTo')}?['Email'],''))),greaterOrEquals(int(coalesce({it('SLAHours')},0)),{3*DAY_H}))"}}),
+        ("StuckAssigned_lines", {"type": "Select", "inputs": {"from": "@body('StuckAssigned')",
+            "select": "@" + li(f"'IT-',{it('ID')},' — ',{it('Title')},' (open ',string(div(int(coalesce({it('SLAHours')},0)),{DAY_H})),' day(s), with ',coalesce({it('AssignedTo')}?['DisplayName'],''),')'")}}),
+        ("StuckAssigned_ids", {"type": "Select", "inputs": {"from": "@body('StuckAssigned')", "select": f"@concat('IT-',{it('ID')})"}}),
+        ("ClockBad", compose("@or(outputs('ClockStalled'),greater(length(body('StuckResolved')?['value']),0),greater(length(body('StuckAssigned')),0))")),
 
         # --- 7. dashboard data (HD15 alive): newest Modified on the stats rows, business hours only ---
         ("Dash_rows", sp("GetItems", {"table": DASH, "$filter": f"ID ne {DASH_HEALTH}", "$orderby": "Modified desc", "$top": 1})),
@@ -3078,6 +3112,7 @@ def hd16():
             f"if(greater(outputs('InboxCount'),0),concat(string(outputs('InboxCount')),' email(s) waiting in the IT Support inbox for over 20 min — HD1 is not ticketing them.',{NL}),''),"
             f"if(outputs('ClockStalled'),concat('Hourly clock: no open ticket updated in 3 hours — check HD6.',{NL}),''),"
             f"if(greater(length(body('StuckResolved')?['value']),0),concat('Not auto-closed: ',join(body('StuckResolved_ids'),', '),{NL}),''),"
+            f"if(greater(length(body('StuckAssigned')),0),concat('Stuck with one tech 3+ days: ',join(body('StuckAssigned_ids'),', '),{NL}),''),"
             f"if(outputs('DashStale'),concat('Dashboard charts not refreshed for 30 min — check HD15.',{NL}),''),"
             f"if(outputs('NotifyRecent'),concat({prev}?['Slot10'],{NL}),'')))")),
         ("Update_dashboard", sp("PatchItem", {"table": DASH, "id": DASH_HEALTH, "item/Title": "Health", "item/Sub": "IT Ticket Systems Health",
@@ -3094,7 +3129,7 @@ def hd16():
             "item/Slot5": "Email intake (HD1)", "item/Share5": "@outputs('IntakeState')",
             "item/Slot19": "@if(greater(outputs('InboxCount'),0),concat(outputs('InboxCount'),' email(s) stuck in the inbox'),if(not(outputs('InboxOk')),'could not read the inbox',if(greater(outputs('ReviewCount'),0),concat(outputs('ReviewCount'),' in the Review folder, last 24 h'),'inbox clear; nothing in Review')))",
             "item/Slot6": "Clock & auto-close (HD6)", "item/Share6": "@if(outputs('ClockBad'),100,0)",
-            "item/Slot20": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),if(less({hourET},8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked'))))",
+            "item/Slot20": f"@if(outputs('ClockStalled'),'no open ticket updated in 3 h',if(greater(length(body('StuckResolved')?['value']),0),concat(length(body('StuckResolved')?['value']),' resolved ticket(s) past 72 h not closed'),if(greater(length(body('StuckAssigned')),0),concat(length(body('StuckAssigned')),' ticket(s) stuck with one tech 3+ days'),if(less({hourET},8),'clock starts at 8:00',concat(length(body('Working')?['value']),' open tickets being tracked')))))",
             "item/Slot7": "Dashboard data (HD15)", "item/Share7": "@if(outputs('DashStale'),100,0)",
             "item/Slot21": "@if(outputs('DashStale'),'charts not refreshed for 30 min',if(greater(length(body('Dash_rows')?['value']),0),concat('refreshed ',formatDateTime(convertTimeZone(first(body('Dash_rows')?['value'])?['Modified'],'UTC','" + TZ + "'),'h:mm tt')),'no data yet'))",
             "item/Slot8": "Reauthentication", "item/Share8": "@if(not(outputs('ConnectionsOk')),-1,if(outputs('ReauthBad'),100,0))",
@@ -3124,6 +3159,8 @@ def hd16():
             "concat('OK (',length(body('Working')?['value']),' open tickets being tracked)')),'</p>',"
             "'<p><b>Auto-close (HD6):</b> ',if(greater(length(body('StuckResolved')?['value']),0),"
             "concat('<span style=\"color:#b00\">',length(body('StuckResolved')?['value']),' resolved ticket(s) past 72h still not closed</span><ul>',join(body('StuckResolved_lines'),''),'</ul>'),'OK'),'</p>',"
+            "'<p><b>Stuck with one tech (HD6):</b> ',if(greater(length(body('StuckAssigned')),0),"
+            "concat('<span style=\"color:#b00\">',length(body('StuckAssigned')),' ticket(s) open 3+ business days, still assigned</span><ul>',join(body('StuckAssigned_lines'),''),'</ul>'),'OK'),'</p>',"
             "'<p><b>Dashboard data (HD15):</b> ',if(outputs('DashStale'),'<span style=\"color:#b00\">stale for 30 min</span>','OK'),'</p>',"
             f"'<p><b>Notifications (HD3/HD4 self-checks):</b> ',if(outputs('NotifyRecent'),concat('<span style=\"color:#b00\">',{prev}?['Slot10'],'</span>'),'no problems reported in the last 24h'),'</p>',"
             "'<p><b>Emails parked in Review (last 24h, excluding system mail):</b></p>',outputs('ReviewNote'),"
