@@ -524,7 +524,7 @@ def action_card(ID, title, req, cat, pri, src, details, pic=None, photo=None, re
         {"type": "TextBlock", "text": "Category", "weight": "Bolder"},
         {"type": "Input.ChoiceSet", "id": "edit_category", "style": "compact", "value": "",
          "choices": [keep] + [{"title": c, "value": c} for c in CATEGORIES]},
-        {"type": "TextBlock", "text": "Only the fields you change are updated. Reassigning notifies the new technician and the requester.",
+        {"type": "TextBlock", "text": "Only the fields you change are updated. Reassigning notifies the new IT Support team member and the requester.",
          "wrap": True, "size": "Small", "isSubtle": True}]
     return {"type": "AdaptiveCard", "version": "1.2",
         "body": [
@@ -1694,7 +1694,7 @@ def hd6():
         ("S", compose(f"@add(int(coalesce({it('SLAHours')},0)),if({biz},1,0))")),
         ("Update_H", sp("PatchItem", {"id": f"@{ID}", "item/Title": f"@{it('Title')}", "item/BusinessHoursOpen": "@outputs('H')", "item/SLAHours": "@outputs('S')"})),
         ("Unassigned_at_4_hours", cond(f"@and({biz},empty(coalesce({it('AssignedTo')}?['Email'],'')),equals(outputs('S'),4))", {
-            "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no technician for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
+            "Post_unassigned_4h": channel(f"<p>IT-@{{{ID}}} has had no IT Support assigned for 4 hours: @{{{it('Title')}}}</p><p>{lnk}</p>")})),
         # Was both email and Teams to Martin+Joseph since 2026-10-27, per Martin's request at the time; dropped
         # back to Teams-only on 2026-11-10 per his broader Teams-only-for-techs request (techs are always
         # Branthaven IT staff, so Teams can always reach them).
